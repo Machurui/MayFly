@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MayFly.Provisioner", "MayFly.Provisioner\MayFly.Provisioner.csproj", "{AC98BCE3-5799-4110-B04D-421F128F26E6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MayFly.Api", "MayFly.Api\MayFly.Api.csproj", "{98D0AF50-CC32-4485-8989-35449C51AE06}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MayFly.Tests", "MayFly.Tests\MayFly.Tests.csproj", "{98D0643F-9A36-46FA-B2E5-C33B49D461CB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AC98BCE3-5799-4110-B04D-421F128F26E6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC98BCE3-5799-4110-B04D-421F128F26E6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC98BCE3-5799-4110-B04D-421F128F26E6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC98BCE3-5799-4110-B04D-421F128F26E6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{98D0AF50-CC32-4485-8989-35449C51AE06}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{98D0AF50-CC32-4485-8989-35449C51AE06}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{98D0AF50-CC32-4485-8989-35449C51AE06}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{98D0AF50-CC32-4485-8989-35449C51AE06}.Release|Any CPU.Build.0 = Release|Any CPU
+		{98D0643F-9A36-46FA-B2E5-C33B49D461CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{98D0643F-9A36-46FA-B2E5-C33B49D461CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{98D0643F-9A36-46FA-B2E5-C33B49D461CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{98D0643F-9A36-46FA-B2E5-C33B49D461CB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,6 @@
+@MayFly.Api_HostAddress = http://localhost:5252
+
+GET {{MayFly.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
