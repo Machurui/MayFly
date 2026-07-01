@@ -1,4 +1,5 @@
 using MayFly.Api.Data;
+using MayFly.Api.Provisioning;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +11,9 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddDbContext<MayFlyContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Metadata")));
+
+builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
+    c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080"));
 
 var app = builder.Build();
 
