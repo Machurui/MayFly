@@ -27,7 +27,7 @@ public sealed class PostgresSeeder : IInitialDataSeeder
         for (int i = 0; i < 30; i++)
         {
             try { await using var c = new NpgsqlConnection(cs); await c.OpenAsync(ct); return; }
-            catch { await Task.Delay(1000, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { await Task.Delay(1000, ct); }
         }
         throw new TimeoutException("postgres not ready for seeding");
     }
@@ -36,7 +36,8 @@ public sealed class PostgresSeeder : IInitialDataSeeder
     {
         var asm = Assembly.GetExecutingAssembly();
         var res = asm.GetManifestResourceNames().Single(n => n.EndsWith(name));
-        using var s = asm.GetManifestResourceStream(res)!;
+        using var s = asm.GetManifestResourceStream(res)
+            ?? throw new InvalidOperationException($"Embedded resource '{res}' stream could not be opened.");
         using var r = new StreamReader(s);
         return r.ReadToEnd();
     }
