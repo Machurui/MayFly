@@ -1,5 +1,6 @@
 using MayFly.Api.Data;
 using MayFly.Api.Provisioning;
+using MayFly.Api.Security;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,10 @@ builder.Services.AddDbContext<MayFlyContext>(o =>
 
 builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
     c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080"));
+
+builder.Services.AddDataProtection();
+builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
+builder.Services.AddSingleton<ITokenService, TokenService>();
 
 var app = builder.Build();
 
