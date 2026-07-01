@@ -26,7 +26,7 @@ public static class ProvisionerEndpoints
         app.MapGet("/instances/{containerId}", async (string containerId, IDockerProvisioner p, CancellationToken ct) =>
         {
             try { return Results.Ok(await p.InspectAsync(containerId, ct)); }
-            catch { return Results.NotFound(); }
+            catch (global::Docker.DotNet.DockerContainerNotFoundException) { return Results.NotFound(); }
         });
     }
 }
