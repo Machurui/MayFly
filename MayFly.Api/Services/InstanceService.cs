@@ -3,6 +3,8 @@ using MayFly.Api.Domain;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using System.Data;
 
 namespace MayFly.Api.Services;
 
@@ -15,41 +17,61 @@ public sealed class InstanceService(
     public async Task<CreateOutcome> CreateAsync(string engine, int ttl, int storageMb, string initData,
         string ip, string sessionId, CancellationToken ct)
     {
-        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
-
-        // Explicit OR avoids EF translation issues with string-converted enum in array.Contains()
-        var active = await db.Instances.CountAsync(
-            i => i.CreatorIp == ip &&
-                 (i.State == InstanceState.Provisioning || i.State == InstanceState.Running), ct);
-
-        if (active >= MaxPerIp) return new CreateOutcome(true, null);
-
-        var prov = await provisioner.CreateAsync(engine, ttl, storageMb, initData, ct);
-        var now = DateTime.UtcNow;
-        var inst = new Instance
+        const int maxAttempts = 2;
+        for (int attempt = 1; ; attempt++)
         {
-            CapabilityToken  = tokens.NewToken(),
-            SessionId        = sessionId,
-            CreatorIp        = ip,
-            Engine           = engine,
-            TtlHours         = ttl,
-            StorageQuotaMb   = storageMb,
-            InitialData      = initData,
-            ContainerId      = prov.ContainerId,
-            VolumeName       = prov.VolumeName,
-            InternalHost     = prov.InternalHost,
-            PublicPort       = prov.PublicPort,
-            DbName           = prov.DbName,
-            DbUser           = prov.DbUser,
-            DbPasswordEnc    = secrets.Protect(prov.DbPassword),
-            State            = InstanceState.Running,
-            CreatedAt        = now,
-            ExpiresAt        = now.AddHours(ttl),
-        };
-        db.Instances.Add(inst);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-        return new CreateOutcome(false, inst);
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+
+            // Explicit OR avoids EF translation issues with string-converted enum in array.Contains()
+            var active = await db.Instances.CountAsync(
+                i => i.CreatorIp == ip &&
+                     (i.State == InstanceState.Provisioning || i.State == InstanceState.Running), ct);
+
+            if (active >= MaxPerIp) return new CreateOutcome(true, null);
+
+            ProvisionResult? prov = null;
+            try
+            {
+                prov = await provisioner.CreateAsync(engine, ttl, storageMb, initData, ct);
+                var now = DateTime.UtcNow;
+                var inst = new Instance
+                {
+                    CapabilityToken  = tokens.NewToken(),
+                    SessionId        = sessionId,
+                    CreatorIp        = ip,
+                    Engine           = engine,
+                    TtlHours         = ttl,
+                    StorageQuotaMb   = storageMb,
+                    InitialData      = initData,
+                    ContainerId      = prov.ContainerId,
+                    VolumeName       = prov.VolumeName,
+                    InternalHost     = prov.InternalHost,
+                    PublicPort       = prov.PublicPort,
+                    DbName           = prov.DbName,
+                    DbUser           = prov.DbUser,
+                    DbPasswordEnc    = secrets.Protect(prov.DbPassword),
+                    State            = InstanceState.Running,
+                    CreatedAt        = now,
+                    ExpiresAt        = now.AddHours(ttl),
+                };
+                db.Instances.Add(inst);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return new CreateOutcome(false, inst);
+            }
+            catch (Exception ex)
+            {
+                // best-effort: destroy the container we just created so it is never orphaned
+                if (prov is not null)
+                {
+                    try { await provisioner.DestroyAsync(prov.ContainerId, prov.VolumeName, prov.PublicPort, ct); }
+                    catch { /* best-effort */ }
+                }
+                // retry once on a Postgres serialization failure (40001); otherwise rethrow
+                if (attempt < maxAttempts && IsSerializationFailure(ex)) continue;
+                throw;
+            }
+        }
     }
 
     public Task<Instance?> GetByTokenAsync(string token, CancellationToken ct)
@@ -69,5 +91,13 @@ public sealed class InstanceService(
         inst.State = InstanceState.Destroyed;
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    private static bool IsSerializationFailure(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is PostgresException pg && pg.SqlState == PostgresErrorCodes.SerializationFailure)
+                return true;
+        return false;
     }
 }

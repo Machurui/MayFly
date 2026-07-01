@@ -55,16 +55,25 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
     public Task InitializeAsync() => _db.StartAsync();
     public Task DisposeAsync() => _db.DisposeAsync().AsTask();
 
-    private (InstanceService sut, MayFlyContext ctx) NewSut()
+    private (InstanceService sut, MayFlyContext ctx) NewSut(
+        Mock<ITokenService>? tokenMock = null,
+        Mock<IProvisionerClient>? provMock = null)
     {
         var ctx = new MayFlyContext(new DbContextOptionsBuilder<MayFlyContext>()
             .UseNpgsql(_db.GetConnectionString()).Options);
         ctx.Database.EnsureCreated();
-        var prov = new Mock<IProvisionerClient>();
-        prov.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20002, "appdb", "appuser", "pw"));
-        var sut = new InstanceService(ctx, prov.Object, new TokenService(),
+
+        if (provMock is null)
+        {
+            provMock = new Mock<IProvisionerClient>();
+            provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
+                    It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20002, "appdb", "appuser", "pw"));
+        }
+
+        ITokenService tokenService = tokenMock is not null ? tokenMock.Object : new TokenService();
+
+        var sut = new InstanceService(ctx, provMock.Object, tokenService,
             new SecretProtector(DataProtectionProvider.Create("t")));
         return (sut, ctx);
     }
@@ -86,5 +95,49 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         var (sut, _) = NewSut();
         var created = (await sut.CreateAsync("postgres", 6, 512, "blank", "8.8.8.8", "s", default)).Instance!;
         (await sut.GetByTokenAsync(created.CapabilityToken, default))!.PublicPort.Should().Be(20002);
+    }
+
+    [Fact]
+    public async Task OrphanContainer_IsDestroyed_WhenSaveChangesFails()
+    {
+        // Pre-insert a row with the fixed token (different IP – won't trigger quota for 5.5.5.5)
+        const string dupeToken = "dupe-token";
+        {
+            await using var seedCtx = new MayFlyContext(new DbContextOptionsBuilder<MayFlyContext>()
+                .UseNpgsql(_db.GetConnectionString()).Options);
+            seedCtx.Database.EnsureCreated();
+            seedCtx.Instances.Add(new Instance
+            {
+                CapabilityToken = dupeToken, SessionId = "seed", CreatorIp = "1.1.1.1",
+                Engine = "postgres", TtlHours = 3, StorageQuotaMb = 256, InitialData = "blank",
+                ContainerId = "seed-cid", VolumeName = "seed-vol", InternalHost = "h", PublicPort = 20099,
+                DbName = "appdb", DbUser = "appuser", DbPasswordEnc = "enc",
+                State = InstanceState.Running, CreatedAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddHours(3)
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var tokenMock = new Mock<ITokenService>();
+        tokenMock.Setup(t => t.NewToken()).Returns(dupeToken);
+        tokenMock.Setup(t => t.Matches(It.IsAny<string>(), It.IsAny<string>())).Returns(true);
+
+        var provMock = new Mock<IProvisionerClient>();
+        provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProvisionResult("orphan-cid", "orphan-vol", "host", 20003, "appdb", "appuser", "pw"));
+        provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var (sut, _) = NewSut(tokenMock, provMock);
+
+        // SaveChanges throws a unique-constraint violation on CapabilityToken
+        Func<Task> act = () => sut.CreateAsync("postgres", 3, 256, "blank", "5.5.5.5", "s", default);
+        await act.Should().ThrowAsync<Exception>();
+
+        // The just-provisioned container must be destroyed, not orphaned
+        provMock.Verify(p => p.DestroyAsync("orphan-cid", "orphan-vol", 20003,
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 }
