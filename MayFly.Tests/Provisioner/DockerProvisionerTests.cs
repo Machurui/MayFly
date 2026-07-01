@@ -50,6 +50,21 @@ public class DockerProvisionerLifecycleTests
             var inspect = await sut.InspectAsync(res.ContainerId, default);
             inspect.State.Should().Be("running");
             inspect.SizeBytes.Should().BeGreaterThan(0);
+
+            // Hardening assertions: verify the container was actually started with the
+            // required security constraints and resource limits.
+            var dockerClient = new DockerClientBuilder().Build();
+            var containerInspect = await dockerClient.Containers.InspectContainerAsync(res.ContainerId, default);
+            var hc = containerInspect.HostConfig;
+            hc.Should().NotBeNull();
+            hc!.CapDrop.Should().Contain("ALL");
+            hc.CapAdd.Should().BeEquivalentTo(
+                new[] { "CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE" });
+            hc.Memory.Should().Be(256L * 1024 * 1024);
+            hc.NanoCPUs.Should().Be(500_000_000L);
+            hc.PidsLimit.Should().Be(200L);
+            hc.SecurityOpt.Should().Contain("no-new-privileges");
+            hc.Mounts.Should().Contain(m => m.Type == "volume");
         }
         finally
         {

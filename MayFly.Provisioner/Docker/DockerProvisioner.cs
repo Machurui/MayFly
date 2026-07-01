@@ -20,6 +20,7 @@ public sealed class DockerProvisioner(
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var port = ports.Allocate();
         string? volume = null;
+        string? containerId = null;
 
         try
         {
@@ -62,15 +63,20 @@ public sealed class DockerProvisioner(
                     RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No }
                 }
             }, ct);
+            containerId = create.ID;
 
-            await docker.Containers.StartContainerAsync(create.ID, new ContainerStartParameters(), ct);
+            await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
-            return new CreateInstanceResult(create.ID, volume!, name, port, dbName, dbUser, password);
+            return new CreateInstanceResult(containerId, volume!, name, port, dbName, dbUser, password);
         }
         catch
         {
-            ports.Release(port);
+            if (containerId is not null)
+            {
+                try { await docker.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); } catch { }
+            }
             if (volume is not null) { try { await volumes.DestroyAsync(volume, ct); } catch { } }
+            ports.Release(port);
             throw;
         }
     }
@@ -105,12 +111,19 @@ public sealed class DockerProvisioner(
     {
         var nets = await docker.Networks.ListNetworksAsync(cancellationToken: ct);
         if (nets.Any(n => n.Name == Network)) return;
-        await docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+        try
         {
-            Name = Network,
-            Driver = "bridge",
-            Internal = false,           // false: containers need outbound port publish; isolation via icc
-            Options = new Dictionary<string, string> { ["com.docker.network.bridge.enable_icc"] = "false" }
-        }, ct);
+            await docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+            {
+                Name = Network,
+                Driver = "bridge",
+                Internal = false,           // false: containers need outbound port publish; isolation via icc
+                Options = new Dictionary<string, string> { ["com.docker.network.bridge.enable_icc"] = "false" }
+            }, ct);
+        }
+        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            // Another concurrent provision already created the network — treat as success.
+        }
     }
 }
