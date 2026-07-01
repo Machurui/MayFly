@@ -1,4 +1,5 @@
 using MayFly.Api.Data;
+using MayFly.Api.Lifecycle;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
@@ -22,6 +23,7 @@ builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
+builder.Services.AddHostedService<LifecycleService>();
 
 var app = builder.Build();
 
