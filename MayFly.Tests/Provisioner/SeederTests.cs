@@ -6,6 +6,7 @@ using MayFly.Provisioner.Seeding;
 using Npgsql;
 using Xunit;
 
+[Collection("docker-sequential")]
 [Trait("Category", "Docker")]
 public class SeederTests
 {

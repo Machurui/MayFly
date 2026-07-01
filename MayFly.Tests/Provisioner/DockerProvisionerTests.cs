@@ -5,6 +5,7 @@ using MayFly.Provisioner.Docker;
 using Npgsql;
 using Xunit;
 
+[Collection("docker-sequential")]
 [Trait("Category", "Docker")]
 public class VolumeProvisionerTests
 {
@@ -19,6 +20,7 @@ public class VolumeProvisionerTests
     }
 }
 
+[Collection("docker-sequential")]
 [Trait("Category", "Docker")]
 public class DockerProvisionerLifecycleTests
 {
