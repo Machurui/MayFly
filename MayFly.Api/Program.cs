@@ -1,6 +1,7 @@
 using MayFly.Api.Data;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
+using MayFly.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,7 @@ builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
 builder.Services.AddDataProtection();
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
+builder.Services.AddScoped<IInstanceService, InstanceService>();
 
 var app = builder.Build();
 
