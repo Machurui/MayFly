@@ -19,5 +19,9 @@ public sealed class ProvisionerClient(HttpClient http) : IProvisionerClient
     }
 
     public async Task<ProvisionInspect> InspectAsync(string containerId, CancellationToken ct)
-        => (await http.GetFromJsonAsync<ProvisionInspect>($"/instances/{containerId}", ct))!;
+    {
+        var resp = await http.GetAsync($"/instances/{containerId}", ct);
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<ProvisionInspect>(cancellationToken: ct))!;
+    }
 }

@@ -25,4 +25,13 @@ public class ProvisionerClientTests
         r.PublicPort.Should().Be(20001);
         r.DbName.Should().Be("appdb");
     }
+
+    [Fact]
+    public async Task InspectAsync_throws_on_non_success_status()
+    {
+        var resp = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var http = new HttpClient(new StubHandler(resp)) { BaseAddress = new Uri("http://provisioner") };
+        var sut = new ProvisionerClient(http);
+        await Assert.ThrowsAsync<HttpRequestException>(() => sut.InspectAsync("cid", default));
+    }
 }
