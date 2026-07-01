@@ -21,6 +21,7 @@ builder.Services.AddDataProtection();
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
+builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
 
 var app = builder.Build();
 
