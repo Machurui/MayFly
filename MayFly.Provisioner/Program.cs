@@ -1,44 +1,31 @@
-var builder = WebApplication.CreateBuilder(args);
+using Docker.DotNet;
+using MayFly.Provisioner.Docker;
+using MayFly.Provisioner.Endpoints;
 
-// Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+namespace MayFly.Provisioner;
 
-var app = builder.Build();
+public interface IProvisionerMarker { }   // marker for WebApplicationFactory
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+public class Program
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    public static void Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
 
-app.UseHttpsRedirection();
+        builder.Services.AddSingleton<IDockerClient>(_ => new DockerClientBuilder().Build());
+        builder.Services.AddSingleton<IPortAllocator>(_ => new PortAllocator(Array.Empty<int>()));
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+        var useXfs = builder.Configuration.GetValue("Provisioner:UseXfsQuota", false);
+        builder.Services.AddSingleton<IVolumeProvisioner>(sp =>
+        {
+            var d = sp.GetRequiredService<IDockerClient>();
+            return useXfs ? new XfsVolumeProvisioner(d) : (IVolumeProvisioner)new PlainVolumeProvisioner(d);
+        });
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+        builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
 
-app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+        var app = builder.Build();
+        app.MapProvisioner();
+        app.Run();
+    }
 }
