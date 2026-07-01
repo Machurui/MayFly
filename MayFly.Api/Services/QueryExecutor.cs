@@ -41,7 +41,7 @@ public sealed class QueryExecutor(ISecretProtector secrets, IConfiguration cfg) 
 
             var cols = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToList();
             var rows = new List<object?[]>();
-            while (await reader.ReadAsync(ct) && rows.Count < RowCap)
+            while (rows.Count < RowCap && await reader.ReadAsync(ct))
             {
                 var row = new object?[reader.FieldCount];
                 for (int i = 0; i < reader.FieldCount; i++)
@@ -50,6 +50,10 @@ public sealed class QueryExecutor(ISecretProtector secrets, IConfiguration cfg) 
             }
             return new QueryResultDto(true, cols, rows, rows.Count, (int)sw.ElapsedMilliseconds,
                 $"{rows.Count} row(s)", null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
