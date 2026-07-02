@@ -38,9 +38,12 @@ services:
       - mayfly-internal
 
   web:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: MayFly.Web/Dockerfile
     networks:
       - mayfly-internal
+    # No host ports published — only caddy exposes 80 to the host
 
   caddy:
     image: caddy:2-alpine
@@ -61,3 +64,6 @@ volumes:
 networks:
   mayfly-internal:
     driver: bridge
+    # Pin the network name so DockerProvisioner (which hardcodes "mayfly-internal")
+    # joins the same network as the compose services rather than creating a second one.
+    name: mayfly-internal

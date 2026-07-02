@@ -1,0 +1,7 @@
+# Caddy file-server for the Vue SPA inside the web container.
+# All unknown paths fall back to index.html for client-side routing.
+:80 {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+}
