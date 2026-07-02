@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: mayfly
-      POSTGRES_PASSWORD: mayfly
+      POSTGRES_PASSWORD: ${MAYFLY_DB_PASSWORD:-mayfly}
       POSTGRES_DB: mayfly
     ports:
       - "5433:5432"
@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: MayFly.Api/Dockerfile
     environment:
-      ConnectionStrings__Metadata: "Host=metadata-db;Database=mayfly;Username=mayfly;Password=mayfly"
+      ConnectionStrings__Metadata: "Host=metadata-db;Database=mayfly;Username=mayfly;Password=${MAYFLY_DB_PASSWORD:-mayfly}"
       Provisioner__BaseUrl: "http://provisioner:8080"
       PublicHost: "localhost"
     depends_on:

@@ -12,7 +12,7 @@
 #   6. DELETE /api/instances/{token} → 204                      (cleanup)
 set -euo pipefail
 
-REPO=/Users/fanfan/Documents/App/MayFly
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COOKIES=/tmp/mayfly-fs-cookies-$$.txt
 PASS=0
 FAIL=0
