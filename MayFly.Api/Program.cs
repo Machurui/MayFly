@@ -3,14 +3,12 @@ using MayFly.Api.Lifecycle;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
 
 builder.Services.AddDbContext<MayFlyContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Metadata")));
@@ -25,40 +23,29 @@ builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
 builder.Services.AddHostedService<LifecycleService>();
 
+builder.Services.AddControllers();
+
+builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("perip", w =>
+{
+    w.Window = TimeSpan.FromMinutes(1);
+    w.PermitLimit = 60;
+}));
+
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+app.UseForwardedHeaders();
+app.UseMiddleware<SessionCookieMiddleware>();
+app.UseRateLimiter();
+app.MapControllers().RequireRateLimiting("perip");
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+namespace MayFly.Api
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    public interface IApiMarker { }
 }
+
+public partial class Program { }
