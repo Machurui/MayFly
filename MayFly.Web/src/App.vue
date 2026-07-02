@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
+import AppNav from './components/AppNav.vue'
 </script>
 
 <template>
-  <HelloWorld />
+  <AppNav />
+  <main>
+    <RouterView />
+  </main>
 </template>
