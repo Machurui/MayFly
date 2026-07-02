@@ -51,7 +51,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="console-grid" @keydown.meta.enter.prevent="run" @keydown.ctrl.enter.prevent="run">
+  <div class="console-grid">
     <!-- toolbar -->
     <div class="console-toolbar">
       <span class="dim" style="font-size: 11px; text-transform: uppercase; letter-spacing: .08em;">

@@ -13,7 +13,7 @@ describe('QueryResults', () => {
     const w = mount(QueryResults, { props: { result: ok } })
     expect(w.findAll('thead th').map(t => t.text())).toEqual(['n', 'name'])
     expect(w.findAll('tbody tr')).toHaveLength(2)
-    expect(w.text()).toContain('a')
+    expect(w.findAll('tbody td').map(td => td.text())).toContain('a')
   })
 
   it('shows error on failure', () => {

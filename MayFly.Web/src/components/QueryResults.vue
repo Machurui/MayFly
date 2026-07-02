@@ -36,7 +36,7 @@ function isNumeric(val: unknown): boolean {
         <div class="empty">no results yet — hit ⌘⏎ to run</div>
       </template>
       <template v-else-if="!result.success">
-        <p class="danger" style="padding: var(--pad-3);">{{ result.error }}</p>
+        <p class="danger" style="padding: var(--pad-3);">{{ result.error ?? result.message ?? '(query failed)' }}</p>
       </template>
       <template v-else>
         <table class="tbl">
