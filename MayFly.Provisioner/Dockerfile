@@ -11,5 +11,7 @@ WORKDIR /app
 COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
-USER app
+# No USER directive: the provisioner must run as root to access the host Docker socket
+# (docker.sock is root:root with srw-rw---- — non-root cannot connect).
+# This service is internal-only and never exposed to the host network.
 ENTRYPOINT ["dotnet", "MayFly.Provisioner.dll"]

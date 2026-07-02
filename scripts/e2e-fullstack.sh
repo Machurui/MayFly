@@ -95,30 +95,12 @@ until docker compose exec -T metadata-db pg_isready -q 2>/dev/null; do
   ELAPSED=$((ELAPSED + 2))
 done
 echo "  metadata-db ready (${ELAPSED}s)"
+# NOTE: No out-of-band migration step. The API applies EF migrations at startup
+# via db.Database.Migrate() in Program.cs before serving any request.
 
-# ── STEP 3: Apply EF migrations (host dotnet ef → published port 5433) ────────
+# ── STEP 3: Wait for Caddy to accept requests ─────────────────────────────────
 echo ""
-echo "=== STEP 3: Apply EF migrations ==="
-# Build the API project locally so the EF migration runner can execute
-dotnet build "$REPO/MayFly.Api/MayFly.Api.csproj" -c Release \
-  > /tmp/mayfly-apibuild-$$.log 2>&1 \
-  && echo "  API project built (local, for migration runner)." \
-  || { echo "  dotnet build failed:"; cat /tmp/mayfly-apibuild-$$.log; exit 1; }
-
-ConnectionStrings__Metadata="Host=localhost;Port=5433;Database=mayfly;Username=mayfly;Password=mayfly" \
-  dotnet ef database update --project "$REPO/MayFly.Api" --no-build 2>&1 \
-  && echo "  Migrations applied." \
-  || {
-    echo "  'dotnet ef' failed — retrying without --no-build..."
-    ConnectionStrings__Metadata="Host=localhost;Port=5433;Database=mayfly;Username=mayfly;Password=mayfly" \
-      dotnet ef database update --project "$REPO/MayFly.Api" 2>&1 \
-      && echo "  Migrations applied (second attempt)." \
-      || { echo "  Migration failed — stack may not serve API correctly."; exit 1; }
-  }
-
-# ── STEP 4: Wait for Caddy to accept requests ─────────────────────────────────
-echo ""
-echo "=== STEP 4: Wait for Caddy + API readiness ==="
+echo "=== STEP 3: Wait for Caddy + API readiness ==="
 wait_for_http "http://localhost/" 90 "Caddy" || {
   echo "  Service logs:"
   docker compose logs caddy | tail -20

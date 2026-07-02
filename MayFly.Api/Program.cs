@@ -3,6 +3,7 @@ using MayFly.Api.Lifecycle;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,9 @@ builder.Services.AddDbContext<MayFlyContext>(o =>
 builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
     c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080"));
 
-builder.Services.AddDataProtection();
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo("/keys"))
+    .SetApplicationName("MayFly");
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
@@ -49,6 +52,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 });
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
+    db.Database.Migrate();
+}
 
 app.UseForwardedHeaders();
 app.UseMiddleware<SessionCookieMiddleware>();

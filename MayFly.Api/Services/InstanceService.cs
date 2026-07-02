@@ -68,7 +68,12 @@ public sealed class InstanceService(
                     catch { /* best-effort */ }
                 }
                 // retry once on a Postgres serialization failure (40001); otherwise rethrow
-                if (attempt < maxAttempts && IsSerializationFailure(ex)) continue;
+                if (attempt < maxAttempts && IsSerializationFailure(ex))
+                {
+                    // Detach any tracked entities so the retry starts with a clean change tracker.
+                    db.ChangeTracker.Clear();
+                    continue;
+                }
                 throw;
             }
         }

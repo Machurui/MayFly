@@ -11,5 +11,7 @@ WORKDIR /app
 COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
+# Pre-create /keys owned by the app user so the dpkeys volume is writable on first mount.
+RUN mkdir /keys && chown app:app /keys
 USER app
 ENTRYPOINT ["dotnet", "MayFly.Api.dll"]

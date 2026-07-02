@@ -1,3 +1,5 @@
+using MayFly.Api.Data;
+using MayFly.Api.Domain;
 using MayFly.Api.Dtos;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
@@ -9,7 +11,8 @@ namespace MayFly.Api.Controllers;
 [ApiController]
 [Route("api/instances")]
 public sealed class InstancesController(
-    IInstanceService instances, IQueryExecutor queryExec, ISecretProtector secrets, IConfiguration cfg)
+    IInstanceService instances, IQueryExecutor queryExec, ISecretProtector secrets, IConfiguration cfg,
+    MayFlyContext db)
     : ControllerBase
 {
     private string PublicHost => cfg["PublicHost"] ?? "localhost";
@@ -53,6 +56,17 @@ public sealed class InstancesController(
     {
         var inst = await instances.GetByTokenAsync(token, ct);
         if (inst is null) return NotFound();
-        return Ok(await queryExec.ExecuteAsync(inst, body.Sql, ct));
+        var result = await queryExec.ExecuteAsync(inst, body.Sql, ct);
+        db.QueryLogs.Add(new QueryLog
+        {
+            InstanceId   = inst.Id,
+            ExecutedAt   = DateTime.UtcNow,
+            DurationMs   = result.DurationMs,
+            RowCount     = result.RowCount,
+            Success      = result.Success,
+            ErrorMessage = result.Error,
+        });
+        await db.SaveChangesAsync(ct);
+        return Ok(result);
     }
 }

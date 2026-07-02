@@ -5,12 +5,15 @@ services:
       POSTGRES_USER: mayfly
       POSTGRES_PASSWORD: ${MAYFLY_DB_PASSWORD:-mayfly}
       POSTGRES_DB: mayfly
-    ports:
-      - "5433:5432"
     volumes:
       - metadata:/var/lib/postgresql/data
     networks:
       - mayfly-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mayfly -d mayfly"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   provisioner:
     build:
@@ -30,10 +33,14 @@ services:
     environment:
       ConnectionStrings__Metadata: "Host=metadata-db;Database=mayfly;Username=mayfly;Password=${MAYFLY_DB_PASSWORD:-mayfly}"
       Provisioner__BaseUrl: "http://provisioner:8080"
-      PublicHost: "localhost"
+      PublicHost: "${PUBLIC_HOST:-localhost}"
     depends_on:
-      - metadata-db
-      - provisioner
+      metadata-db:
+        condition: service_healthy
+      provisioner:
+        condition: service_started
+    volumes:
+      - dpkeys:/keys
     networks:
       - mayfly-internal
 
@@ -60,6 +67,7 @@ services:
 
 volumes:
   metadata: {}
+  dpkeys: {}
 
 networks:
   mayfly-internal:
