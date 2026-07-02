@@ -1,0 +1,63 @@
+services:
+  metadata-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mayfly
+      POSTGRES_PASSWORD: mayfly
+      POSTGRES_DB: mayfly
+    ports:
+      - "5433:5432"
+    volumes:
+      - metadata:/var/lib/postgresql/data
+    networks:
+      - mayfly-internal
+
+  provisioner:
+    build:
+      context: .
+      dockerfile: MayFly.Provisioner/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - mayfly-internal
+
+  # api is NOT published to the host — only caddy exposes 80/443.
+  # This is what makes trusting RFC1918 X-Forwarded-For safe.
+  api:
+    build:
+      context: .
+      dockerfile: MayFly.Api/Dockerfile
+    environment:
+      ConnectionStrings__Metadata: "Host=metadata-db;Database=mayfly;Username=mayfly;Password=mayfly"
+      Provisioner__BaseUrl: "http://provisioner:8080"
+      PublicHost: "localhost"
+    depends_on:
+      - metadata-db
+      - provisioner
+    networks:
+      - mayfly-internal
+
+  web:
+    image: nginx:alpine
+    networks:
+      - mayfly-internal
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+    depends_on:
+      - api
+      - web
+    networks:
+      - mayfly-internal
+
+volumes:
+  metadata: {}
+
+networks:
+  mayfly-internal:
+    driver: bridge
