@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatBytes, timeUntil } from '../src/lib/format'
+import { formatBytes, timeUntil } from './format'
 
 describe('formatBytes', () => {
   it('formats MB and GB', () => {
@@ -14,6 +14,6 @@ describe('timeUntil', () => {
     expect(timeUntil(new Date(Date.now() - 1000).toISOString())).toBe('expired')
   })
   it('returns h/m for future dates', () => {
-    expect(timeUntil(new Date(Date.now() + 2 * 3600_000 + 60_000).toISOString())).toMatch(/^2h/)
+    expect(timeUntil(new Date(Date.now() + 2 * 3600_000 + 60_000).toISOString())).toBe('2h 1m')
   })
 })
