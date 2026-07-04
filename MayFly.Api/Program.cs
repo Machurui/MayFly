@@ -53,8 +53,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+// Apply schema at startup for real deployments. Skipped under the "Testing" environment,
+// where WebApplicationFactory boots the app without a live metadata DB.
+if (!app.Environment.IsEnvironment("Testing"))
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
     db.Database.Migrate();
 }

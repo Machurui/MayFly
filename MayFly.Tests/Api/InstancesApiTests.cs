@@ -13,6 +13,8 @@ public sealed class MayFlyWebFactory : WebApplicationFactory<MayFly.Api.IApiMark
 {
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
+        // "Testing" env skips the startup Migrate() (no live metadata DB in this test).
+        builder.UseSetting("environment", "Testing");
         builder.UseSetting("ConnectionStrings:Metadata",
             "Host=localhost;Port=5433;Database=mayfly;Username=mayfly;Password=mayfly");
     }
