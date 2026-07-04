@@ -57,16 +57,20 @@ public sealed class InstancesController(
         var inst = await instances.GetByTokenAsync(token, ct);
         if (inst is null) return NotFound();
         var result = await queryExec.ExecuteAsync(inst, body.Sql, ct);
-        db.QueryLogs.Add(new QueryLog
+        try
         {
-            InstanceId   = inst.Id,
-            ExecutedAt   = DateTime.UtcNow,
-            DurationMs   = result.DurationMs,
-            RowCount     = result.RowCount,
-            Success      = result.Success,
-            ErrorMessage = result.Error,
-        });
-        await db.SaveChangesAsync(ct);
+            db.QueryLogs.Add(new QueryLog
+            {
+                InstanceId   = inst.Id,
+                ExecutedAt   = DateTime.UtcNow,
+                DurationMs   = result.DurationMs,
+                RowCount     = result.RowCount,
+                Success      = result.Success,
+                ErrorMessage = result.Error,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+        catch { /* best-effort: query-log persistence must not break the query response */ }
         return Ok(result);
     }
 }
