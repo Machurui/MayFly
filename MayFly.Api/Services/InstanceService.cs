@@ -91,10 +91,18 @@ public sealed class InstanceService(
     public async Task<bool> DestroyAsync(string token, CancellationToken ct)
     {
         var inst = await db.Instances.SingleOrDefaultAsync(i => i.CapabilityToken == token, ct);
-        if (inst is null || inst.State is InstanceState.Destroyed) return false;
+        if (inst is null) return false;
+
+        // Atomically claim the destroy: only one caller flips an active row to Destroying.
+        var claimed = await db.Instances
+            .Where(i => i.Id == inst.Id &&
+                        (i.State == InstanceState.Running || i.State == InstanceState.Provisioning))
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.State, InstanceState.Destroying), ct);
+        if (claimed == 0) return false;   // already being/been destroyed
+
         await provisioner.DestroyAsync(inst.ContainerId, inst.VolumeName, inst.PublicPort, ct);
-        inst.State = InstanceState.Destroyed;
-        await db.SaveChangesAsync(ct);
+        await db.Instances.Where(i => i.Id == inst.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.State, InstanceState.Destroyed), ct);
         return true;
     }
 

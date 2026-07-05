@@ -1,6 +1,6 @@
 namespace MayFly.Api.Domain;
 
-public enum InstanceState { Provisioning, Running, Expired, Destroyed, Failed }
+public enum InstanceState { Provisioning, Running, Destroying, Expired, Destroyed, Failed }
 
 public class Instance
 {

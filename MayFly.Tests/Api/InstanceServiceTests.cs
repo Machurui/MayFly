@@ -140,4 +140,30 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         provMock.Verify(p => p.DestroyAsync("orphan-cid", "orphan-vol", 20003,
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task DestroyAsync_is_idempotent_single_transition()
+    {
+        var provMock = new Mock<IProvisionerClient>();
+        provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20010, "appdb", "appuser", "pw"));
+        provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var (sut, ctx) = NewSut(provMock: provMock);
+        var created = (await sut.CreateAsync("postgres", 3, 256, "blank", "7.7.7.7", "s", default)).Instance!;
+        var token = created.CapabilityToken;
+
+        var first = await sut.DestroyAsync(token, default);
+        var second = await sut.DestroyAsync(token, default);
+
+        first.Should().BeTrue();
+        second.Should().BeFalse();
+        (await ctx.Instances.AsNoTracking().SingleAsync(i => i.CapabilityToken == token)).State
+            .Should().Be(InstanceState.Destroyed);
+        provMock.Verify(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
 }
