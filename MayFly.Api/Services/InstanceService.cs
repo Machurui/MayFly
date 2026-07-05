@@ -100,7 +100,16 @@ public sealed class InstanceService(
             .ExecuteUpdateAsync(s => s.SetProperty(i => i.State, InstanceState.Destroying), ct);
         if (claimed == 0) return false;   // already being/been destroyed
 
-        await provisioner.DestroyAsync(inst.ContainerId, inst.VolumeName, inst.PublicPort, ct);
+        try
+        {
+            await provisioner.DestroyAsync(inst.ContainerId, inst.VolumeName, inst.PublicPort, ct);
+        }
+        catch
+        {
+            await db.Instances.Where(i => i.Id == inst.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.State, InstanceState.Failed), ct);
+            throw;   // surface the failure; reconcile will clean the orphan container
+        }
         await db.Instances.Where(i => i.Id == inst.Id)
             .ExecuteUpdateAsync(s => s.SetProperty(i => i.State, InstanceState.Destroyed), ct);
         return true;

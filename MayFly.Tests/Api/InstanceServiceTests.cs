@@ -166,4 +166,34 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         provMock.Verify(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task DestroyAsync_concurrent_calls_only_one_destroys()
+    {
+        // Arrange: shared provisioner mock with both Create and Destroy set up.
+        var provMock = new Mock<IProvisionerClient>();
+        provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProvisionResult("cid-conc", "vol-conc", "host", 20020, "appdb", "appuser", "pw"));
+        provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Two services sharing the same metadata DB but with independent EF Core contexts.
+        var (svcA, _)    = NewSut(provMock: provMock);
+        var (svcB, ctxB) = NewSut(provMock: provMock);
+
+        // Create the instance via svcA; capture the capability token.
+        var token = (await svcA.CreateAsync("postgres", 3, 256, "blank", "6.6.6.6", "s", default)).Instance!.CapabilityToken;
+
+        // Act: fire both destroys concurrently — a naive read-then-act would let both through.
+        var results = await Task.WhenAll(svcA.DestroyAsync(token, default), svcB.DestroyAsync(token, default));
+
+        // Assert: exactly one caller wins the atomic DB-level claim; provisioner called once.
+        results.Count(r => r).Should().Be(1, "exactly one concurrent caller should win the atomic DB claim");
+        (await ctxB.Instances.AsNoTracking().SingleAsync(i => i.CapabilityToken == token)).State
+            .Should().Be(InstanceState.Destroyed);
+        provMock.Verify(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
 }
