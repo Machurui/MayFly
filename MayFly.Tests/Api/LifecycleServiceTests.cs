@@ -19,6 +19,47 @@ public class LifecycleServiceTests : IAsyncLifetime
     public Task DisposeAsync() => _db.DisposeAsync().AsTask();
 
     [Fact]
+    public async Task Reconcile_marks_running_with_missing_container_as_failed()
+    {
+        // Arrange: real metadata DB, Running instance whose ContainerId is absent from live Docker set.
+        // Mock ListManagedAsync returns empty → no live containers.
+        var services = new ServiceCollection();
+        services.AddDbContext<MayFlyContext>(o => o.UseNpgsql(_db.GetConnectionString()));
+        var prov = new Mock<IProvisionerClient>();
+        prov.Setup(p => p.ListManagedAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ManagedContainer>());
+        services.AddSingleton(prov.Object);
+        services.AddScoped(_ => Mock.Of<IQueryExecutor>());
+        var sp = services.BuildServiceProvider();
+
+        using (var scope = sp.CreateScope())
+        {
+            var ctx = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
+            ctx.Database.EnsureCreated();
+            ctx.Instances.Add(new Instance
+            {
+                CapabilityToken = "x", ContainerId = "dead-container-abc", VolumeName = "dead-vol",
+                PublicPort = 20099, State = InstanceState.Running,
+                CreatedAt = DateTime.UtcNow.AddHours(-1), ExpiresAt = DateTime.UtcNow.AddHours(2)
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var sut = new LifecycleService(sp.GetRequiredService<IServiceScopeFactory>(),
+            Mock.Of<ILogger<LifecycleService>>());
+
+        // Act
+        await sut.RunReconcileAsync(default);
+
+        // Assert: instance marked Failed and DestroyAsync called to release port
+        using var verify = sp.CreateScope();
+        var db = verify.ServiceProvider.GetRequiredService<MayFlyContext>();
+        (await db.Instances.SingleAsync()).State.Should().Be(InstanceState.Failed);
+        prov.Verify(p => p.DestroyAsync("dead-container-abc", "dead-vol", 20099,
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Reaper_destroys_expired_and_marks_state()
     {
         var services = new ServiceCollection();

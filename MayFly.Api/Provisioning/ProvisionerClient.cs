@@ -24,4 +24,17 @@ public sealed class ProvisionerClient(HttpClient http) : IProvisionerClient
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<ProvisionInspect>(cancellationToken: ct))!;
     }
+
+    public async Task<IReadOnlyList<ManagedContainer>> ListManagedAsync(CancellationToken ct)
+    {
+        var resp = await http.GetAsync("/managed", ct);
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<List<ManagedContainer>>(cancellationToken: ct))!;
+    }
+
+    public async Task DestroyByInstanceAsync(string instanceId, CancellationToken ct)
+    {
+        var resp = await http.DeleteAsync($"/managed/{instanceId}", ct);
+        resp.EnsureSuccessStatusCode();
+    }
 }

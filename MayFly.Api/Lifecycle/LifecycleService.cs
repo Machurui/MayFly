@@ -13,11 +13,48 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        try { await RunReconcileAsync(ct); }
+        catch (Exception ex) { log.LogError(ex, "startup reconcile failed"); }
+
         while (!ct.IsCancellationRequested)
         {
             try { await RunOnceAsync(ct); }
             catch (Exception ex) { log.LogError(ex, "lifecycle tick failed"); }
             await Task.Delay(Interval, ct);
+        }
+    }
+
+    public async Task RunReconcileAsync(CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
+        var prov = scope.ServiceProvider.GetRequiredService<IProvisionerClient>();
+
+        var liveList = await prov.ListManagedAsync(ct);
+        var liveContainerIds = liveList.Select(m => m.ContainerId).ToHashSet();
+
+        // Direction 1: metadata says active but container not in live set → Failed + release resources
+        var active = await db.Instances.Where(i =>
+            i.State == InstanceState.Running || i.State == InstanceState.Provisioning ||
+            i.State == InstanceState.Destroying).ToListAsync(ct);
+
+        foreach (var inst in active.Where(i => !liveContainerIds.Contains(i.ContainerId)))
+        {
+            inst.State = InstanceState.Failed;
+            try { await prov.DestroyAsync(inst.ContainerId, inst.VolumeName, inst.PublicPort, ct); }
+            catch (Exception ex) { log.LogWarning(ex, "reconcile: release resources for {Id} failed", inst.Id); }
+        }
+        await db.SaveChangesAsync(ct);
+
+        // Direction 2: live containers with no active metadata → orphan, destroy
+        var knownContainerIds = active.Select(i => i.ContainerId).ToHashSet();
+        foreach (var m in liveList)
+        {
+            if (!knownContainerIds.Contains(m.ContainerId))
+            {
+                try { await prov.DestroyByInstanceAsync(m.InstanceId, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "reconcile: orphan destroy {Id} failed", m.InstanceId); }
+            }
         }
     }
 

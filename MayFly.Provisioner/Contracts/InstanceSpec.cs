@@ -4,3 +4,4 @@ public record CreateInstanceRequest(string Engine, int TtlHours, int StorageMb, 
 public record CreateInstanceResult(string ContainerId, string VolumeName, string InternalHost,
                                    int PublicPort, string DbName, string DbUser, string DbPassword);
 public record InspectResult(string State, long SizeBytes);
+public record ManagedContainerInfo(string ContainerId, string InstanceId);

@@ -34,5 +34,14 @@ public static class ProvisionerEndpoints
             try { return Results.Ok(await p.InspectAsync(containerId, ct)); }
             catch (global::Docker.DotNet.DockerContainerNotFoundException) { return Results.NotFound(); }
         });
+
+        app.MapGet("/managed", async (IDockerProvisioner p, CancellationToken ct) =>
+            Results.Ok(await p.ListManagedAsync(ct)));
+
+        app.MapDelete("/managed/{instanceId}", async (string instanceId, IDockerProvisioner p, CancellationToken ct) =>
+        {
+            await p.DestroyByInstanceAsync(instanceId, ct);
+            return Results.NoContent();
+        });
     }
 }

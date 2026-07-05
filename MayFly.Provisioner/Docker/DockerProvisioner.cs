@@ -35,7 +35,11 @@ public sealed class DockerProvisioner(
                 Image = Image,
                 Name = name,
                 Hostname = name,
-                Labels = new Dictionary<string, string> { ["mayfly.instance"] = id },
+                Labels = new Dictionary<string, string>
+                {
+                    ["mayfly.instance"] = id,
+                    ["mayfly.role"] = "db"
+                },
                 Env = new List<string>
                 {
                     $"POSTGRES_USER={dbUser}",
@@ -105,6 +109,58 @@ public sealed class DockerProvisioner(
         long size = c.SizeRootFs ?? c.SizeRw ?? 0;
         var state = c.State?.Running == true ? "running" : (c.State?.Status ?? "unknown");
         return new InspectResult(state, size);
+    }
+
+    public async Task<IReadOnlyList<ManagedContainerInfo>> ListManagedAsync(CancellationToken ct)
+    {
+        var containers = await docker.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = false,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["label"] = new Dictionary<string, bool> { ["mayfly.role=db"] = true }
+            }
+        }, ct);
+
+        return containers
+            .Where(c => c.Labels.ContainsKey("mayfly.instance"))
+            .Select(c => new ManagedContainerInfo(c.ID, c.Labels["mayfly.instance"]))
+            .ToList();
+    }
+
+    public async Task DestroyByInstanceAsync(string instanceId, CancellationToken ct)
+    {
+        var containers = await docker.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = true,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["label"] = new Dictionary<string, bool> { [$"mayfly.instance={instanceId}"] = true }
+            }
+        }, ct);
+
+        foreach (var c in containers)
+        {
+            string? volumeName = c.Mounts?.FirstOrDefault(m => m.Type == "volume")?.Name;
+            int port = 0;
+            var portEntry = c.Ports?.FirstOrDefault(p => p.PrivatePort == 5432);
+            if (portEntry?.PublicPort is ushort pp) port = pp;
+
+            try
+            {
+                await docker.Containers.RemoveContainerAsync(c.ID,
+                    new ContainerRemoveParameters { Force = true }, ct);
+            }
+            catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: remove {Id} failed", c.ID); }
+
+            if (!string.IsNullOrEmpty(volumeName))
+            {
+                try { await volumes.DestroyAsync(volumeName, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: remove volume {Vol} failed", volumeName); }
+            }
+
+            if (port > 0) ports.Release(port);
+        }
     }
 
     private async Task EnsureImageAsync(CancellationToken ct)
