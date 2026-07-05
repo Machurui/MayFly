@@ -19,6 +19,7 @@ public class Instance
     public string DbName { get; set; } = "";
     public string DbUser { get; set; } = "";
     public string DbPasswordEnc { get; set; } = "";
+    public string AdminPasswordEnc { get; set; } = "";
     public InstanceState State { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime ExpiresAt { get; set; }

@@ -68,7 +68,7 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
             provMock = new Mock<IProvisionerClient>();
             provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
                     It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20002, "appdb", "appuser", "pw"));
+                .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20002, "appdb", "appuser", "pw", "mayflyadmin", "adminpw"));
         }
 
         ITokenService tokenService = tokenMock is not null ? tokenMock.Object : new TokenService();
@@ -125,7 +125,7 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         var provMock = new Mock<IProvisionerClient>();
         provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
                 It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProvisionResult("orphan-cid", "orphan-vol", "host", 20003, "appdb", "appuser", "pw"));
+            .ReturnsAsync(new ProvisionResult("orphan-cid", "orphan-vol", "host", 20003, "appdb", "appuser", "pw", "mayflyadmin", "adminpw"));
         provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -147,7 +147,7 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         var provMock = new Mock<IProvisionerClient>();
         provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
                 It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20010, "appdb", "appuser", "pw"));
+            .ReturnsAsync(new ProvisionResult("cid", "vol", "host", 20010, "appdb", "appuser", "pw", "mayflyadmin", "adminpw"));
         provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -174,7 +174,7 @@ public class InstanceServiceQuotaTests : IAsyncLifetime
         var provMock = new Mock<IProvisionerClient>();
         provMock.Setup(p => p.CreateAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
                 It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProvisionResult("cid-conc", "vol-conc", "host", 20020, "appdb", "appuser", "pw"));
+            .ReturnsAsync(new ProvisionResult("cid-conc", "vol-conc", "host", 20020, "appdb", "appuser", "pw", "mayflyadmin", "adminpw"));
         provMock.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);

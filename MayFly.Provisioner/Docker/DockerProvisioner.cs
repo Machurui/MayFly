@@ -17,9 +17,11 @@ public sealed class DockerProvisioner(
     {
         var id = Guid.NewGuid().ToString("N")[..16];
         var name = $"mayfly-pg-{id}";
-        var dbUser = "appuser";
-        var dbName = "appdb";
-        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        const string adminUser = "mayflyadmin";
+        const string appUser = "appuser";
+        const string dbName = "appdb";
+        var adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        var appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var port = ports.Allocate();
         string? volume = null;
         string? containerId = null;
@@ -42,8 +44,8 @@ public sealed class DockerProvisioner(
                 },
                 Env = new List<string>
                 {
-                    $"POSTGRES_USER={dbUser}",
-                    $"POSTGRES_PASSWORD={password}",
+                    $"POSTGRES_USER={adminUser}",
+                    $"POSTGRES_PASSWORD={adminPassword}",
                     $"POSTGRES_DB={dbName}"
                 },
                 ExposedPorts = new Dictionary<string, EmptyStruct> { ["5432/tcp"] = default },
@@ -73,7 +75,12 @@ public sealed class DockerProvisioner(
 
             await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
-            return new CreateInstanceResult(containerId, volume!, name, port, dbName, dbUser, password);
+            var roleInit = new RoleInitializer();
+            await roleInit.InitAsync("localhost", port, dbName, adminUser, adminPassword, appUser, appPassword, ct);
+
+            return new CreateInstanceResult(containerId, volume!, name, port, dbName,
+                DbUser: appUser, DbPassword: appPassword,
+                AdminUser: adminUser, AdminPassword: adminPassword);
         }
         catch
         {

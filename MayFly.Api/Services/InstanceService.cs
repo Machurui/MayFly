@@ -50,6 +50,7 @@ public sealed class InstanceService(
                     DbName           = prov.DbName,
                     DbUser           = prov.DbUser,
                     DbPasswordEnc    = secrets.Protect(prov.DbPassword),
+                    AdminPasswordEnc = secrets.Protect(prov.AdminPassword),
                     State            = InstanceState.Running,
                     CreatedAt        = now,
                     ExpiresAt        = now.AddHours(ttl),

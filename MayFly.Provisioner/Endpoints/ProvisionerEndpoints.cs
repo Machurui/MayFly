@@ -18,7 +18,7 @@ public static class ProvisionerEndpoints
             var useInternal = cfg.GetValue("Provisioner:UseInternalHost", true);
             var host = useInternal ? result.InternalHost : "localhost";
             var port = useInternal ? 5432 : result.PublicPort;
-            await seeder.SeedAsync(req.InitialData, host, port, result.DbName, result.DbUser, result.DbPassword, ct);
+            await seeder.SeedAsync(req.InitialData, host, port, result.DbName, result.AdminUser, result.AdminPassword, ct);
             return Results.Ok(result);
         });
 

@@ -17,7 +17,7 @@ public class ProvisionerClientTests
     {
         var resp = new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = JsonContent.Create(new ProvisionResult("cid","vol","host",20001,"appdb","appuser","pw"))
+            Content = JsonContent.Create(new ProvisionResult("cid","vol","host",20001,"appdb","appuser","pw","mayflyadmin","adminpw"))
         };
         var http = new HttpClient(new StubHandler(resp)) { BaseAddress = new Uri("http://provisioner") };
         var sut = new ProvisionerClient(http);

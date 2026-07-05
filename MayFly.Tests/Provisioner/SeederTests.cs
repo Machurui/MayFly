@@ -21,8 +21,10 @@ public class SeederTests
         try
         {
             var seeder = new PostgresSeeder();
-            await seeder.SeedAsync("northwind", "localhost", r.PublicPort, r.DbName, r.DbUser, r.DbPassword, default);
+            // Seed as mayflyadmin (admin credentials, consistent with production endpoint behaviour).
+            await seeder.SeedAsync("northwind", "localhost", r.PublicPort, r.DbName, r.AdminUser, r.AdminPassword, default);
 
+            // Verify seeded data is visible to the unprivileged appuser.
             var cs = $"Host=localhost;Port={r.PublicPort};Database={r.DbName};Username={r.DbUser};Password={r.DbPassword}";
             await using var conn = new NpgsqlConnection(cs);
             await conn.OpenAsync();
