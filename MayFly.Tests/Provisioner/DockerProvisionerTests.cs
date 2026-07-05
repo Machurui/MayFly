@@ -2,6 +2,7 @@ using Docker.DotNet;
 using FluentAssertions;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
 
@@ -28,7 +29,8 @@ public class DockerProvisionerLifecycleTests
         var docker = new DockerClientBuilder().Build();
         return new DockerProvisioner(docker,
             new PortAllocator(Array.Empty<int>()),
-            new PlainVolumeProvisioner(docker));
+            new PlainVolumeProvisioner(docker),
+            NullLogger<DockerProvisioner>.Instance);
     }
 
     [Fact]

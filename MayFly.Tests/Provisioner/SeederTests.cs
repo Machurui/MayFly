@@ -3,6 +3,7 @@ using FluentAssertions;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
 using MayFly.Provisioner.Seeding;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
 
@@ -15,7 +16,7 @@ public class SeederTests
     {
         var docker = new DockerClientBuilder().Build();
         var prov = new DockerProvisioner(docker, new PortAllocator(Array.Empty<int>()),
-            new PlainVolumeProvisioner(docker));
+            new PlainVolumeProvisioner(docker), NullLogger<DockerProvisioner>.Instance);
         var r = await prov.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "northwind"), default);
         try
         {

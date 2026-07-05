@@ -2,11 +2,13 @@ using System.Security.Cryptography;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using MayFly.Provisioner.Contracts;
+using Microsoft.Extensions.Logging;
 
 namespace MayFly.Provisioner.Docker;
 
 public sealed class DockerProvisioner(
-    IDockerClient docker, IPortAllocator ports, IVolumeProvisioner volumes) : IDockerProvisioner
+    IDockerClient docker, IPortAllocator ports, IVolumeProvisioner volumes,
+    ILogger<DockerProvisioner> log) : IDockerProvisioner
 {
     private const string Image = "postgres:16-alpine";
     private const string Network = "mayfly-internal";
@@ -73,9 +75,14 @@ public sealed class DockerProvisioner(
         {
             if (containerId is not null)
             {
-                try { await docker.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); } catch { }
+                try { await docker.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "cleanup: remove container {Id} failed", containerId); }
             }
-            if (volume is not null) { try { await volumes.DestroyAsync(volume, ct); } catch { } }
+            if (volume is not null)
+            {
+                try { await volumes.DestroyAsync(volume, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "cleanup: destroy volume {Volume} failed", volume); }
+            }
             ports.Release(port);
             throw;
         }
@@ -84,8 +91,10 @@ public sealed class DockerProvisioner(
     public async Task DestroyAsync(string containerId, string volumeName, int publicPort, CancellationToken ct)
     {
         try { await docker.Containers.RemoveContainerAsync(containerId,
-            new ContainerRemoveParameters { Force = true }, ct); } catch { }
-        try { await volumes.DestroyAsync(volumeName, ct); } catch { }
+            new ContainerRemoveParameters { Force = true }, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "destroy: remove container {Id} failed", containerId); }
+        try { await volumes.DestroyAsync(volumeName, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "destroy: destroy volume {Volume} failed", volumeName); }
         ports.Release(publicPort);
     }
 
