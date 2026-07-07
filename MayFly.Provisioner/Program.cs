@@ -1,7 +1,6 @@
 using Docker.DotNet;
 using MayFly.Provisioner.Docker;
 using MayFly.Provisioner.Endpoints;
-using MayFly.Provisioner.Seeding;
 
 namespace MayFly.Provisioner;
 
@@ -24,7 +23,6 @@ public class Program
         });
 
         builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
-        builder.Services.AddSingleton<IInitialDataSeeder, PostgresSeeder>();
 
         var app = builder.Build();
         app.MapProvisioner();
