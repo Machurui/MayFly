@@ -27,12 +27,20 @@ public class EgressTests
     {
         var (docker, sut) = NewSut();
         var res = await sut.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);
+        string? instanceId = null;
 
         try
         {
+            // --- 0. Direct config guard: mayfly-users must be an internal network ---
+            // Primary regression guard: if Internal=false is set on the network (e.g. by a
+            // provisioner bug), this assertion catches it before any egress probe runs.
+            var net = await docker.Networks.InspectNetworkAsync("mayfly-users");
+            net.Internal.Should().BeTrue(
+                "mayfly-users must be created with Internal=true; a regression to false would open internet egress for all user DB containers");
+
             // --- 1. Inspect the DB container ---
             var dbInspect = await docker.Containers.InspectContainerAsync(res.ContainerId, default);
-            var instanceId = dbInspect.Config.Labels["mayfly.instance"];
+            instanceId = dbInspect.Config.Labels["mayfly.instance"];
 
             // DB must be on mayfly-users (internal) only — no PortBindings
             dbInspect.NetworkSettings.Networks.Should().ContainKey("mayfly-users",
@@ -72,13 +80,18 @@ public class EgressTests
                 && sidecarPortBindings.Any(kv => kv.Value?.Count > 0);
             sidecarPublishesPort.Should().BeTrue("sidecar must publish the public port");
 
-            // --- 3. Egress probe: wget from inside the DB container must be blocked ---
+            // --- 3. Egress probe: TCP dial from inside the DB container must fail ---
+            // Probe: try to establish a raw TCP connection to 1.1.1.1:80 using busybox nc
+            // (available in postgres:16-alpine via busybox). With Internal=true on mayfly-users,
+            // there is no default gateway so nc times out and exits non-zero → NOEGRESS is printed.
+            // If egress were open, nc would connect, get EOF on stdin, exit 0 → REACHED is printed.
+            // REACHED is a positive success marker: its ABSENCE unambiguously proves the block.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var execCreate = await docker.Exec.CreateContainerExecAsync(
                 res.ContainerId,
                 new ContainerExecCreateParameters
                 {
-                    Cmd = new List<string> { "sh", "-c", "wget -T2 -q -O- http://1.1.1.1 2>&1 || echo BLOCKED" },
+                    Cmd = new List<string> { "sh", "-c", "(nc -w2 1.1.1.1 80 && echo REACHED) || echo NOEGRESS" },
                     AttachStdout = true,
                     AttachStderr = true
                 },
@@ -95,8 +108,10 @@ public class EgressTests
 
             var probeOutput = Encoding.UTF8.GetString(stdoutBuf.ToArray())
                             + Encoding.UTF8.GetString(stderrBuf.ToArray());
-            probeOutput.Should().Contain("BLOCKED",
-                "DB container on internal network must have no internet egress");
+            probeOutput.Should().Contain("NOEGRESS",
+                "DB container on internal network must have no internet egress; NOEGRESS is printed only when nc fails to connect");
+            probeOutput.Should().NotContain("REACHED",
+                "REACHED is only printed when nc succeeds — its presence means egress is open, a security regression");
 
             // --- 4. Connect via the sidecar's published host port ---
             var cs = $"Host=localhost;Port={res.PublicPort};Database={res.DbName};" +
@@ -115,10 +130,6 @@ public class EgressTests
 
             // Verify DB container is gone
             await Task.Delay(500);
-            Func<Task> probe = async () =>
-                await docker.Containers.InspectContainerAsync(res.ContainerId, default);
-            // Container should be gone — InspectAsync throws DockerContainerNotFoundException
-            // (or the container is in a removed state)
             try
             {
                 var dbPost = await docker.Containers.InspectContainerAsync(res.ContainerId, default);
@@ -127,6 +138,25 @@ public class EgressTests
             catch
             {
                 // Container removed — expected
+            }
+
+            // Fix 2: Verify sidecar was also removed by DestroyAsync (guards against sidecar leaks)
+            if (instanceId is not null)
+            {
+                var sidecarsPost = await docker.Containers.ListContainersAsync(new ContainersListParameters
+                {
+                    All = true,
+                    Filters = new Dictionary<string, IDictionary<string, bool>>
+                    {
+                        ["label"] = new Dictionary<string, bool>
+                        {
+                            [$"mayfly.instance={instanceId}"] = true,
+                            ["mayfly.role=sidecar"] = true
+                        }
+                    }
+                }, default);
+                sidecarsPost.Should().BeEmpty(
+                    "DestroyAsync must remove the sidecar; a leak would leave a container consuming resources and holding the port");
             }
         }
     }

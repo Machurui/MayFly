@@ -109,6 +109,7 @@ public sealed class DockerProvisioner(
                         ["5432/tcp"] = new List<PortBinding> { new() { HostPort = port.ToString() } }
                     },
                     Memory = 64L * 1024 * 1024,
+                    NanoCPUs = 250_000_000L,           // 0.25 CPU
                     PidsLimit = 50L,
                     CapDrop = new List<string> { "ALL" },
                     SecurityOpt = new List<string> { "no-new-privileges" },
