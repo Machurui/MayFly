@@ -14,7 +14,13 @@ public sealed class DockerProvisioner(
     ILogger<DockerProvisioner> log) : IDockerProvisioner
 {
     private const string Image = "postgres:16-alpine";
-    private const string Network = "mayfly-internal";
+    private const string SidecarImage = "alpine/socat:1.8.0.0";
+
+    /// <summary>Internal-only bridge network: user DB containers live here; no gateway → no egress.</summary>
+    private const string UserNetwork = "mayfly-users";
+
+    /// <summary>Normal bridge network: socat sidecar publishes the host port from here.</summary>
+    private const string IngressNetwork = "mayfly-ingress";
 
     public async Task<CreateInstanceResult> CreateAsync(CreateInstanceRequest req, CancellationToken ct)
     {
@@ -28,13 +34,16 @@ public sealed class DockerProvisioner(
         var port = ports.Allocate();
         string? volume = null;
         string? containerId = null;
+        string? sidecarId = null;
 
         try
         {
             await EnsureImageAsync(ct);
-            await EnsureNetworkAsync(ct);
+            await EnsureSidecarImageAsync(ct);
+            await EnsureNetworksAsync(ct);
             volume = await volumes.CreateAsync(id, req.StorageMb, ct);
 
+            // Create DB container on the internal user network (no published ports).
             var create = await docker.Containers.CreateContainerAsync(new CreateContainerParameters
             {
                 Image = Image,
@@ -51,24 +60,17 @@ public sealed class DockerProvisioner(
                     $"POSTGRES_PASSWORD={adminPassword}",
                     $"POSTGRES_DB={dbName}"
                 },
-                ExposedPorts = new Dictionary<string, EmptyStruct> { ["5432/tcp"] = default },
                 HostConfig = new HostConfig
                 {
-                    PortBindings = new Dictionary<string, IList<PortBinding>>
-                    {
-                        ["5432/tcp"] = new List<PortBinding> { new() { HostPort = port.ToString() } }
-                    },
                     Mounts = new List<Mount>
                     {
                         new() { Type = "volume", Source = volume, Target = "/var/lib/postgresql/data" }
                     },
-                    NetworkMode = Network,
+                    NetworkMode = UserNetwork,
                     Memory = 256L * 1024 * 1024,
                     NanoCPUs = 500_000_000L,           // 0.5 CPU
                     PidsLimit = 200L,
                     CapDrop = new List<string> { "ALL" },
-                    // Add back only the minimum capabilities postgres needs to initialise
-                    // (drop ALL + add minimum is more secure than leaving defaults)
                     CapAdd = new List<string> { "CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE" },
                     SecurityOpt = new List<string> { "no-new-privileges" },
                     RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No }
@@ -77,9 +79,6 @@ public sealed class DockerProvisioner(
             containerId = create.ID;
 
             // Upload init scripts into the created-but-not-yet-started container.
-            // Postgres will execute them at first init (empty data dir), running as
-            // POSTGRES_USER (mayflyadmin superuser) against POSTGRES_DB, before
-            // accepting external connections. No external Npgsql connection needed.
             await using var tarStream = BuildInitTar(appUser, appPassword, dbName, req.InitialData);
             await docker.Containers.ExtractArchiveToContainerAsync(
                 containerId,
@@ -89,12 +88,54 @@ public sealed class DockerProvisioner(
 
             await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
+            // Create socat sidecar: listens on the public host port and forwards to the DB by name.
+            // Create on mayfly-ingress first (for the host port binding), then connect to mayfly-users.
+            var sidecarCreate = await docker.Containers.CreateContainerAsync(new CreateContainerParameters
+            {
+                Image = SidecarImage,
+                Name = $"mayfly-sidecar-{id}",
+                Labels = new Dictionary<string, string>
+                {
+                    ["mayfly.instance"] = id,
+                    ["mayfly.role"] = "sidecar"
+                },
+                Cmd = new List<string> { "-d", "TCP-LISTEN:5432,fork,reuseaddr", $"TCP:{name}:5432" },
+                ExposedPorts = new Dictionary<string, EmptyStruct> { ["5432/tcp"] = default },
+                HostConfig = new HostConfig
+                {
+                    NetworkMode = IngressNetwork,
+                    PortBindings = new Dictionary<string, IList<PortBinding>>
+                    {
+                        ["5432/tcp"] = new List<PortBinding> { new() { HostPort = port.ToString() } }
+                    },
+                    Memory = 64L * 1024 * 1024,
+                    PidsLimit = 50L,
+                    CapDrop = new List<string> { "ALL" },
+                    SecurityOpt = new List<string> { "no-new-privileges" },
+                    RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No }
+                }
+            }, ct);
+            sidecarId = sidecarCreate.ID;
+
+            // Connect sidecar to mayfly-users so socat can reach the DB by container name.
+            await docker.Networks.ConnectNetworkAsync(UserNetwork, new NetworkConnectParameters
+            {
+                Container = sidecarId
+            }, ct);
+
+            await docker.Containers.StartContainerAsync(sidecarId, new ContainerStartParameters(), ct);
+
             return new CreateInstanceResult(containerId, volume!, name, port, dbName,
                 DbUser: appUser, DbPassword: appPassword,
                 AdminUser: adminUser, AdminPassword: adminPassword);
         }
         catch
         {
+            if (sidecarId is not null)
+            {
+                try { await docker.Containers.RemoveContainerAsync(sidecarId, new ContainerRemoveParameters { Force = true }, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "cleanup: remove sidecar {Id} failed", sidecarId); }
+            }
             if (containerId is not null)
             {
                 try { await docker.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); }
@@ -112,9 +153,42 @@ public sealed class DockerProvisioner(
 
     public async Task DestroyAsync(string containerId, string volumeName, int publicPort, CancellationToken ct)
     {
+        // Locate the sidecar before removing the DB container.
+        string? sidecarId = null;
+        try
+        {
+            var inspect = await docker.Containers.InspectContainerAsync(containerId, ct);
+            if (inspect.Config?.Labels?.TryGetValue("mayfly.instance", out var instanceId) == true
+                && !string.IsNullOrEmpty(instanceId))
+            {
+                var sidecars = await docker.Containers.ListContainersAsync(new ContainersListParameters
+                {
+                    All = true,
+                    Filters = new Dictionary<string, IDictionary<string, bool>>
+                    {
+                        ["label"] = new Dictionary<string, bool>
+                        {
+                            [$"mayfly.instance={instanceId}"] = true,
+                            ["mayfly.role=sidecar"] = true
+                        }
+                    }
+                }, ct);
+                sidecarId = sidecars.FirstOrDefault()?.ID;
+            }
+        }
+        catch (Exception ex) { log.LogWarning(ex, "destroy: inspect {Id} failed while locating sidecar", containerId); }
+
         try { await docker.Containers.RemoveContainerAsync(containerId,
             new ContainerRemoveParameters { Force = true }, ct); }
         catch (Exception ex) { log.LogWarning(ex, "destroy: remove container {Id} failed", containerId); }
+
+        if (sidecarId is not null)
+        {
+            try { await docker.Containers.RemoveContainerAsync(sidecarId,
+                new ContainerRemoveParameters { Force = true }, ct); }
+            catch (Exception ex) { log.LogWarning(ex, "destroy: remove sidecar {Id} failed", sidecarId); }
+        }
+
         try { await volumes.DestroyAsync(volumeName, ct); }
         catch (Exception ex) { log.LogWarning(ex, "destroy: destroy volume {Volume} failed", volumeName); }
         ports.Release(publicPort);
@@ -148,6 +222,7 @@ public sealed class DockerProvisioner(
 
     public async Task DestroyByInstanceAsync(string instanceId, CancellationToken ct)
     {
+        // Queries by mayfly.instance label — catches both the DB and the sidecar container.
         var containers = await docker.Containers.ListContainersAsync(new ContainersListParameters
         {
             All = true,
@@ -160,8 +235,9 @@ public sealed class DockerProvisioner(
         foreach (var c in containers)
         {
             string? volumeName = c.Mounts?.FirstOrDefault(m => m.Type == "volume")?.Name;
+            // The sidecar holds the host port binding; the DB no longer publishes any port.
             int port = 0;
-            var portEntry = c.Ports?.FirstOrDefault(p => p.PrivatePort == 5432);
+            var portEntry = c.Ports?.FirstOrDefault(p => p.PrivatePort == 5432 && p.PublicPort > 0);
             if (portEntry?.PublicPort is ushort pp) port = pp;
 
             try
@@ -197,10 +273,6 @@ public sealed class DockerProvisioner(
             if (initialData == "northwind")
             {
                 var northwindSql = ReadEmbeddedNorthwind();
-                // Append explicit grants so appuser can read/write the seeded tables.
-                // ALTER DEFAULT PRIVILEGES in 00-roles.sql covers future objects, but
-                // an explicit GRANT is the safe belt-and-suspenders approach for init scripts
-                // that run as a batch in postgres's entrypoint.
                 var seedSql = northwindSql +
                     "\nGRANT ALL ON ALL TABLES IN SCHEMA public TO appuser;" +
                     "\nGRANT ALL ON ALL SEQUENCES IN SCHEMA public TO appuser;\n";
@@ -224,13 +296,8 @@ public sealed class DockerProvisioner(
         tw.WriteEntry(entry);
     }
 
-    /// <summary>
-    /// Builds the 00-roles.sql init script content: creates appuser with scoped grants
-    /// and installs pg_trgm + uuid-ossp extensions.
-    /// </summary>
     private static string BuildRolesSql(string appUser, string appPassword, string dbName)
     {
-        // Hex passwords cannot contain quotes, but we defensively escape anyway.
         var pwdLiteral = appPassword.Replace("'", "''");
         return
             $"CREATE ROLE \"{appUser}\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{pwdLiteral}';\n" +
@@ -260,23 +327,45 @@ public sealed class DockerProvisioner(
             null, new Progress<JSONMessage>(), ct);
     }
 
-    private async Task EnsureNetworkAsync(CancellationToken ct)
+    private async Task EnsureSidecarImageAsync(CancellationToken ct)
+    {
+        var existing = await docker.Images.ListImagesAsync(new ImagesListParameters { All = true }, ct);
+        if (existing.Any(i => i.RepoTags?.Contains(SidecarImage) == true)) return;
+        await docker.Images.CreateImageAsync(
+            new ImagesCreateParameters { FromImage = "alpine/socat", Tag = "1.8.0.0" },
+            null, new Progress<JSONMessage>(), ct);
+    }
+
+    private async Task EnsureNetworksAsync(CancellationToken ct)
     {
         var nets = await docker.Networks.ListNetworksAsync(cancellationToken: ct);
-        if (nets.Any(n => n.Name == Network)) return;
-        try
+
+        if (!nets.Any(n => n.Name == UserNetwork))
         {
-            await docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+            try
             {
-                Name = Network,
-                Driver = "bridge",
-                Internal = false,           // false: containers need outbound port publish; isolation via icc
-                Options = new Dictionary<string, string> { ["com.docker.network.bridge.enable_icc"] = "false" }
-            }, ct);
+                await docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+                {
+                    Name = UserNetwork,
+                    Driver = "bridge",
+                    Internal = true  // No gateway → no internet egress
+                }, ct);
+            }
+            catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict) { }
         }
-        catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
+
+        if (!nets.Any(n => n.Name == IngressNetwork))
         {
-            // Another concurrent provision already created the network — treat as success.
+            try
+            {
+                await docker.Networks.CreateNetworkAsync(new NetworksCreateParameters
+                {
+                    Name = IngressNetwork,
+                    Driver = "bridge",
+                    Internal = false
+                }, ct);
+            }
+            catch (DockerApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict) { }
         }
     }
 }

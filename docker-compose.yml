@@ -23,6 +23,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - mayfly-internal
+    # provisioner is intentionally NOT on mayfly-users: it does not connect to user DBs directly
 
   # api is NOT published to the host — only caddy exposes 80/443.
   # This is what makes trusting RFC1918 X-Forwarded-For safe.
@@ -43,6 +44,7 @@ services:
       - dpkeys:/keys
     networks:
       - mayfly-internal
+      - mayfly-users  # reaches user DB containers for query execution
 
   web:
     build:
@@ -72,6 +74,14 @@ volumes:
 networks:
   mayfly-internal:
     driver: bridge
-    # Pin the network name so DockerProvisioner (which hardcodes "mayfly-internal")
-    # joins the same network as the compose services rather than creating a second one.
+    # Pin the network name so compose services share the same network object
     name: mayfly-internal
+
+  mayfly-users:
+    driver: bridge
+    internal: true   # No gateway → user DB containers cannot reach the internet
+    name: mayfly-users
+
+  mayfly-ingress:
+    driver: bridge
+    name: mayfly-ingress
