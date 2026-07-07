@@ -1,4 +1,6 @@
+using System.Text;
 using Docker.DotNet;
+using Docker.DotNet.Models;
 using FluentAssertions;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
@@ -68,6 +70,42 @@ public class DockerProvisionerLifecycleTests
             hc.PidsLimit.Should().Be(200L);
             hc.SecurityOpt.Should().Contain("no-new-privileges");
             hc.Mounts.Should().Contain(m => m.Type == "volume");
+
+            // Read-only rootfs: DB container must run with a read-only root filesystem.
+            hc.ReadonlyRootfs.Should().BeTrue("DB container must use read-only rootfs");
+
+            // Tmpfs: required writable paths must be mounted as tmpfs.
+            hc.Tmpfs.Should().NotBeNull("DB container must have tmpfs mounts for runtime-writable paths");
+            hc.Tmpfs.Should().ContainKey("/tmp", "postgres needs a writable /tmp");
+            hc.Tmpfs.Should().ContainKey("/var/run/postgresql", "postgres socket directory must be writable");
+            hc.Tmpfs.Should().ContainKey("/run", "/run must be writable for runtime pid/lock files");
+
+            // Verify write to /etc fails (read-only rootfs enforcement).
+            var execCreate = await dockerClient.Exec.CreateContainerExecAsync(
+                res.ContainerId,
+                new ContainerExecCreateParameters
+                {
+                    Cmd = new List<string> { "sh", "-c", "echo x > /etc/x && echo WRITABLE || echo READONLY" },
+                    AttachStdout = true,
+                    AttachStderr = true
+                },
+                default);
+
+            using var execStream = await dockerClient.Exec.StartContainerExecAsync(
+                execCreate.ID,
+                new ContainerExecStartParameters { Detach = false },
+                default);
+
+            using var stdoutBuf = new MemoryStream();
+            using var stderrBuf = new MemoryStream();
+            await execStream.CopyOutputToAsync(Stream.Null, stdoutBuf, stderrBuf, default);
+
+            var writeOutput = Encoding.UTF8.GetString(stdoutBuf.ToArray())
+                            + Encoding.UTF8.GetString(stderrBuf.ToArray());
+            writeOutput.Should().Contain("READONLY",
+                "writes to /etc must be rejected by read-only rootfs");
+            writeOutput.Should().NotContain("WRITABLE",
+                "read-only rootfs must prevent writes to /etc; WRITABLE is only printed when the write succeeds");
         }
         finally
         {

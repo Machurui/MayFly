@@ -33,6 +33,8 @@ public sealed class DockerProvisioner(
         var appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var port = ports.Allocate();
         string? volume = null;
+        string? initVolumeName = null;
+        string? writerId = null;
         string? containerId = null;
         string? sidecarId = null;
 
@@ -43,7 +45,48 @@ public sealed class DockerProvisioner(
             await EnsureNetworksAsync(ct);
             volume = await volumes.CreateAsync(id, req.StorageMb, ct);
 
+            // Create a named volume for init scripts. ReadonlyRootfs prevents
+            // ExtractArchiveToContainerAsync from writing to the container's writable layer
+            // directly, so we populate the volume via a temporary writer container instead.
+            initVolumeName = $"mayfly-init-{id}";
+            await docker.Volumes.CreateAsync(
+                new VolumesCreateParameters { Name = initVolumeName }, ct);
+
+            // Temporary writer: postgres image with overridden entrypoint so the init
+            // scripts entrypoint does NOT run. We start it just long enough to let Docker
+            // resolve the volume mount, then extract the tar into it.
+            var writerName = $"mayfly-initwriter-{id}";
+            var writerCreate = await docker.Containers.CreateContainerAsync(new CreateContainerParameters
+            {
+                Image = Image,
+                Name = writerName,
+                Entrypoint = new List<string> { "sh" },
+                Cmd = new List<string> { "-c", "sleep 5" },
+                HostConfig = new HostConfig
+                {
+                    Mounts = new List<Mount>
+                    {
+                        new() { Type = "volume", Source = initVolumeName, Target = "/docker-entrypoint-initdb.d" }
+                    }
+                }
+            }, ct);
+            writerId = writerCreate.ID;
+
+            // Start writer so Docker mounts the volume — extractions go into the volume.
+            await docker.Containers.StartContainerAsync(writerId, new ContainerStartParameters(), ct);
+            await using var tarStream = BuildInitTar(appUser, appPassword, dbName, req.InitialData);
+            await docker.Containers.ExtractArchiveToContainerAsync(
+                writerId,
+                new CopyToContainerParameters { Path = "/docker-entrypoint-initdb.d" },
+                tarStream,
+                ct);
+            await docker.Containers.RemoveContainerAsync(
+                writerId, new ContainerRemoveParameters { Force = true }, ct);
+            writerId = null;
+
             // Create DB container on the internal user network (no published ports).
+            // ReadonlyRootfs = true hardens the container; tmpfs provides the runtime-
+            // writable paths postgres needs. Init scripts and data live in volumes.
             var create = await docker.Containers.CreateContainerAsync(new CreateContainerParameters
             {
                 Image = Image,
@@ -64,7 +107,8 @@ public sealed class DockerProvisioner(
                 {
                     Mounts = new List<Mount>
                     {
-                        new() { Type = "volume", Source = volume, Target = "/var/lib/postgresql/data" }
+                        new() { Type = "volume", Source = volume, Target = "/var/lib/postgresql/data" },
+                        new() { Type = "volume", Source = initVolumeName, Target = "/docker-entrypoint-initdb.d" }
                     },
                     NetworkMode = UserNetwork,
                     Memory = 256L * 1024 * 1024,
@@ -73,18 +117,17 @@ public sealed class DockerProvisioner(
                     CapDrop = new List<string> { "ALL" },
                     CapAdd = new List<string> { "CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE" },
                     SecurityOpt = new List<string> { "no-new-privileges" },
-                    RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No }
+                    RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No },
+                    ReadonlyRootfs = true,
+                    Tmpfs = new Dictionary<string, string>
+                    {
+                        ["/tmp"] = "rw,noexec,nosuid,size=64m",
+                        ["/var/run/postgresql"] = "rw,noexec,nosuid,size=16m",
+                        ["/run"] = "rw,noexec,nosuid,size=16m"
+                    }
                 }
             }, ct);
             containerId = create.ID;
-
-            // Upload init scripts into the created-but-not-yet-started container.
-            await using var tarStream = BuildInitTar(appUser, appPassword, dbName, req.InitialData);
-            await docker.Containers.ExtractArchiveToContainerAsync(
-                containerId,
-                new CopyToContainerParameters { Path = "/docker-entrypoint-initdb.d" },
-                tarStream,
-                ct);
 
             await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
@@ -142,6 +185,16 @@ public sealed class DockerProvisioner(
                 try { await docker.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); }
                 catch (Exception ex) { log.LogWarning(ex, "cleanup: remove container {Id} failed", containerId); }
             }
+            if (writerId is not null)
+            {
+                try { await docker.Containers.RemoveContainerAsync(writerId, new ContainerRemoveParameters { Force = true }, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "cleanup: remove writer {Id} failed", writerId); }
+            }
+            if (initVolumeName is not null)
+            {
+                try { await docker.Volumes.RemoveAsync(initVolumeName, force: true, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "cleanup: destroy init volume {Volume} failed", initVolumeName); }
+            }
             if (volume is not null)
             {
                 try { await volumes.DestroyAsync(volume, ct); }
@@ -154,14 +207,17 @@ public sealed class DockerProvisioner(
 
     public async Task DestroyAsync(string containerId, string volumeName, int publicPort, CancellationToken ct)
     {
-        // Locate the sidecar before removing the DB container.
+        // Locate the sidecar and init-scripts volume before removing the DB container.
         string? sidecarId = null;
+        string? initVolumeName = null;
         try
         {
             var inspect = await docker.Containers.InspectContainerAsync(containerId, ct);
             if (inspect.Config?.Labels?.TryGetValue("mayfly.instance", out var instanceId) == true
                 && !string.IsNullOrEmpty(instanceId))
             {
+                initVolumeName = $"mayfly-init-{instanceId}";
+
                 var sidecars = await docker.Containers.ListContainersAsync(new ContainersListParameters
                 {
                     All = true,
@@ -192,6 +248,13 @@ public sealed class DockerProvisioner(
 
         try { await volumes.DestroyAsync(volumeName, ct); }
         catch (Exception ex) { log.LogWarning(ex, "destroy: destroy volume {Volume} failed", volumeName); }
+
+        if (initVolumeName is not null)
+        {
+            try { await docker.Volumes.RemoveAsync(initVolumeName, force: true, ct); }
+            catch (Exception ex) { log.LogWarning(ex, "destroy: destroy init volume {Volume} failed", initVolumeName); }
+        }
+
         ports.Release(publicPort);
     }
 
@@ -256,11 +319,15 @@ public sealed class DockerProvisioner(
 
             if (port > 0) ports.Release(port);
         }
+
+        // Clean up the init-scripts volume (named by convention).
+        try { await docker.Volumes.RemoveAsync($"mayfly-init-{instanceId}", force: true, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: remove init volume for {Id} failed", instanceId); }
     }
 
     /// <summary>
     /// Builds an in-memory tar stream containing the Postgres init scripts to be uploaded
-    /// into /docker-entrypoint-initdb.d before the container is started.
+    /// into /docker-entrypoint-initdb.d via the init-scripts volume.
     /// </summary>
     private static MemoryStream BuildInitTar(
         string appUser, string appPassword, string dbName, string initialData)
