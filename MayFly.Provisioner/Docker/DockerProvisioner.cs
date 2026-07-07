@@ -1,4 +1,7 @@
+using System.Formats.Tar;
+using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using MayFly.Provisioner.Contracts;
@@ -73,10 +76,18 @@ public sealed class DockerProvisioner(
             }, ct);
             containerId = create.ID;
 
-            await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
+            // Upload init scripts into the created-but-not-yet-started container.
+            // Postgres will execute them at first init (empty data dir), running as
+            // POSTGRES_USER (mayflyadmin superuser) against POSTGRES_DB, before
+            // accepting external connections. No external Npgsql connection needed.
+            await using var tarStream = BuildInitTar(appUser, appPassword, dbName, req.InitialData);
+            await docker.Containers.ExtractArchiveToContainerAsync(
+                containerId,
+                new CopyToContainerParameters { Path = "/docker-entrypoint-initdb.d" },
+                tarStream,
+                ct);
 
-            var roleInit = new RoleInitializer();
-            await roleInit.InitAsync("localhost", port, dbName, adminUser, adminPassword, appUser, appPassword, ct);
+            await docker.Containers.StartContainerAsync(containerId, new ContainerStartParameters(), ct);
 
             return new CreateInstanceResult(containerId, volume!, name, port, dbName,
                 DbUser: appUser, DbPassword: appPassword,
@@ -168,6 +179,76 @@ public sealed class DockerProvisioner(
 
             if (port > 0) ports.Release(port);
         }
+    }
+
+    /// <summary>
+    /// Builds an in-memory tar stream containing the Postgres init scripts to be uploaded
+    /// into /docker-entrypoint-initdb.d before the container is started.
+    /// </summary>
+    private static MemoryStream BuildInitTar(
+        string appUser, string appPassword, string dbName, string initialData)
+    {
+        var ms = new MemoryStream();
+        using (var tw = new TarWriter(ms, TarEntryFormat.Gnu, leaveOpen: true))
+        {
+            var rolesSql = BuildRolesSql(appUser, appPassword, dbName);
+            WriteTarEntry(tw, "00-roles.sql", rolesSql);
+
+            if (initialData == "northwind")
+            {
+                var northwindSql = ReadEmbeddedNorthwind();
+                // Append explicit grants so appuser can read/write the seeded tables.
+                // ALTER DEFAULT PRIVILEGES in 00-roles.sql covers future objects, but
+                // an explicit GRANT is the safe belt-and-suspenders approach for init scripts
+                // that run as a batch in postgres's entrypoint.
+                var seedSql = northwindSql +
+                    "\nGRANT ALL ON ALL TABLES IN SCHEMA public TO appuser;" +
+                    "\nGRANT ALL ON ALL SEQUENCES IN SCHEMA public TO appuser;\n";
+                WriteTarEntry(tw, "01-seed.sql", seedSql);
+            }
+        } // TarWriter.Dispose() writes the end-of-archive marker
+
+        ms.Position = 0;
+        return ms;
+    }
+
+    private static void WriteTarEntry(TarWriter tw, string name, string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var entry = new GnuTarEntry(TarEntryType.RegularFile, name)
+        {
+            DataStream = new MemoryStream(bytes),
+            Mode = UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                   UnixFileMode.GroupRead | UnixFileMode.OtherRead
+        };
+        tw.WriteEntry(entry);
+    }
+
+    /// <summary>
+    /// Builds the 00-roles.sql init script content: creates appuser with scoped grants
+    /// and installs pg_trgm + uuid-ossp extensions.
+    /// </summary>
+    private static string BuildRolesSql(string appUser, string appPassword, string dbName)
+    {
+        // Hex passwords cannot contain quotes, but we defensively escape anyway.
+        var pwdLiteral = appPassword.Replace("'", "''");
+        return
+            $"CREATE ROLE \"{appUser}\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '{pwdLiteral}';\n" +
+            $"GRANT CONNECT ON DATABASE \"{dbName}\" TO \"{appUser}\";\n" +
+            $"GRANT ALL ON SCHEMA public TO \"{appUser}\";\n" +
+            $"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"{appUser}\";\n" +
+            $"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"{appUser}\";\n" +
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm;\n" +
+            "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";\n";
+    }
+
+    private static string ReadEmbeddedNorthwind()
+    {
+        var asm = Assembly.GetExecutingAssembly();
+        var res = asm.GetManifestResourceNames().Single(n => n.EndsWith("northwind.sql"));
+        using var stream = asm.GetManifestResourceStream(res)!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private async Task EnsureImageAsync(CancellationToken ct)

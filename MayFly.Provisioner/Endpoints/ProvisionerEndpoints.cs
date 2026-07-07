@@ -1,6 +1,5 @@
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
-using MayFly.Provisioner.Seeding;
 using MayFly.Provisioner.Validation;
 
 namespace MayFly.Provisioner.Endpoints;
@@ -10,15 +9,11 @@ public static class ProvisionerEndpoints
     public static void MapProvisioner(this WebApplication app)
     {
         app.MapPost("/instances", async (CreateInstanceRequest req, IDockerProvisioner p,
-            IInitialDataSeeder seeder, IConfiguration cfg, CancellationToken ct) =>
+            CancellationToken ct) =>
         {
             var (ok, error) = InstanceSpecValidator.Validate(req);
             if (!ok) return Results.BadRequest(new { error });
             var result = await p.CreateAsync(req, ct);
-            var useInternal = cfg.GetValue("Provisioner:UseInternalHost", true);
-            var host = useInternal ? result.InternalHost : "localhost";
-            var port = useInternal ? 5432 : result.PublicPort;
-            await seeder.SeedAsync(req.InitialData, host, port, result.DbName, result.AdminUser, result.AdminPassword, ct);
             return Results.Ok(result);
         });
 

@@ -17,11 +17,13 @@ public class SeederTests
         var docker = new DockerClientBuilder().Build();
         var prov = new DockerProvisioner(docker, new PortAllocator(Array.Empty<int>()),
             new PlainVolumeProvisioner(docker), NullLogger<DockerProvisioner>.Instance);
-        var r = await prov.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "northwind"), default);
+        // Use "blank" so the init script does not include northwind; we seed explicitly below.
+        var r = await prov.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);
         try
         {
             var seeder = new PostgresSeeder();
-            // Seed as mayflyadmin (admin credentials, consistent with production endpoint behaviour).
+            // Seed as mayflyadmin after container is ready; ALTER DEFAULT PRIVILEGES set by
+            // the init script ensures appuser has access to the newly-created tables.
             await seeder.SeedAsync("northwind", "localhost", r.PublicPort, r.DbName, r.AdminUser, r.AdminPassword, default);
 
             // Verify seeded data is visible to the unprivileged appuser.
