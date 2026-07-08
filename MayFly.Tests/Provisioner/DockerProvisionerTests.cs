@@ -39,6 +39,7 @@ public class DockerProvisionerLifecycleTests
     public async Task Create_yields_reachable_postgres_then_destroy_cleans_up()
     {
         var sut = NewSut();
+        var dockerClient = new DockerClientBuilder().Build();
         var res = await sut.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);
         try
         {
@@ -58,7 +59,6 @@ public class DockerProvisionerLifecycleTests
 
             // Hardening assertions: verify the container was actually started with the
             // required security constraints and resource limits.
-            var dockerClient = new DockerClientBuilder().Build();
             var containerInspect = await dockerClient.Containers.InspectContainerAsync(res.ContainerId, default);
             var hc = containerInspect.HostConfig;
             hc.Should().NotBeNull();
@@ -111,6 +111,12 @@ public class DockerProvisionerLifecycleTests
         {
             await sut.DestroyAsync(res.ContainerId, res.VolumeName, res.PublicPort, default);
         }
+
+        // Assert the credential-bearing init volume is removed after destroy.
+        var initVolumeName = res.VolumeName.Replace("mayfly-vol-", "mayfly-init-");
+        var allVolumes = await dockerClient.Volumes.ListAsync(new VolumesListParameters(), default);
+        allVolumes.Volumes.Should().NotContain(v => v.Name == initVolumeName,
+            "DestroyAsync must remove the credential-bearing init volume to prevent at-rest leaks");
     }
 
     private static async Task WaitForPostgresAsync(string cs)

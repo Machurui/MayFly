@@ -50,7 +50,11 @@ public sealed class DockerProvisioner(
             // directly, so we populate the volume via a temporary writer container instead.
             initVolumeName = $"mayfly-init-{id}";
             await docker.Volumes.CreateAsync(
-                new VolumesCreateParameters { Name = initVolumeName }, ct);
+                new VolumesCreateParameters
+                {
+                    Name = initVolumeName,
+                    Labels = new Dictionary<string, string> { ["mayfly.instance"] = id }
+                }, ct);
 
             // Temporary writer: postgres image with overridden entrypoint so the init
             // scripts entrypoint does NOT run. We start it just long enough to let Docker
@@ -61,7 +65,12 @@ public sealed class DockerProvisioner(
                 Image = Image,
                 Name = writerName,
                 Entrypoint = new List<string> { "sh" },
-                Cmd = new List<string> { "-c", "sleep 5" },
+                Cmd = new List<string> { "-c", "sleep infinity" },
+                Labels = new Dictionary<string, string>
+                {
+                    ["mayfly.instance"] = id,
+                    ["mayfly.role"] = "writer"
+                },
                 HostConfig = new HostConfig
                 {
                     Mounts = new List<Mount>
@@ -108,7 +117,7 @@ public sealed class DockerProvisioner(
                     Mounts = new List<Mount>
                     {
                         new() { Type = "volume", Source = volume, Target = "/var/lib/postgresql/data" },
-                        new() { Type = "volume", Source = initVolumeName, Target = "/docker-entrypoint-initdb.d" }
+                        new() { Type = "volume", Source = initVolumeName, Target = "/docker-entrypoint-initdb.d", ReadOnly = true }
                     },
                     NetworkMode = UserNetwork,
                     Memory = 256L * 1024 * 1024,
@@ -207,17 +216,22 @@ public sealed class DockerProvisioner(
 
     public async Task DestroyAsync(string containerId, string volumeName, int publicPort, CancellationToken ct)
     {
-        // Locate the sidecar and init-scripts volume before removing the DB container.
-        string? sidecarId = null;
-        string? initVolumeName = null;
-        try
-        {
-            var inspect = await docker.Containers.InspectContainerAsync(containerId, ct);
-            if (inspect.Config?.Labels?.TryGetValue("mayfly.instance", out var instanceId) == true
-                && !string.IsNullOrEmpty(instanceId))
-            {
-                initVolumeName = $"mayfly-init-{instanceId}";
+        // Derive the init-volume name from the data-volume name without a container inspect.
+        // This is safe even when the container is already gone (reconcile Direction-1).
+        string? initVolumeName = volumeName.StartsWith("mayfly-vol-")
+            ? volumeName.Replace("mayfly-vol-", "mayfly-init-")
+            : null;
 
+        // Derive instanceId from volumeName to locate the sidecar by label.
+        string? instanceId = volumeName.StartsWith("mayfly-vol-")
+            ? volumeName["mayfly-vol-".Length..]
+            : null;
+
+        string? sidecarId = null;
+        if (instanceId is not null)
+        {
+            try
+            {
                 var sidecars = await docker.Containers.ListContainersAsync(new ContainersListParameters
                 {
                     All = true,
@@ -232,8 +246,8 @@ public sealed class DockerProvisioner(
                 }, ct);
                 sidecarId = sidecars.FirstOrDefault()?.ID;
             }
+            catch (Exception ex) { log.LogWarning(ex, "destroy: locate sidecar for {Id} failed", instanceId); }
         }
-        catch (Exception ex) { log.LogWarning(ex, "destroy: inspect {Id} failed while locating sidecar", containerId); }
 
         try { await docker.Containers.RemoveContainerAsync(containerId,
             new ContainerRemoveParameters { Force = true }, ct); }
@@ -320,9 +334,29 @@ public sealed class DockerProvisioner(
             if (port > 0) ports.Release(port);
         }
 
-        // Clean up the init-scripts volume (named by convention).
-        try { await docker.Volumes.RemoveAsync($"mayfly-init-{instanceId}", force: true, ct); }
-        catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: remove init volume for {Id} failed", instanceId); }
+        // Remove ALL volumes labelled mayfly.instance=<id> (covers data + init + any leaked volumes).
+        // Listing with a label filter is more robust than by-convention naming: it catches every
+        // volume written during a crashed provisioning run, including the credential-bearing init volume.
+        try
+        {
+            var labelledVolumes = await docker.Volumes.ListAsync(new VolumesListParameters
+            {
+                Filters = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    ["label"] = new Dictionary<string, bool>
+                    {
+                        [$"mayfly.instance={instanceId}"] = true
+                    }
+                }
+            }, ct);
+
+            foreach (var vol in labelledVolumes.Volumes ?? [])
+            {
+                try { await docker.Volumes.RemoveAsync(vol.Name, force: true, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: remove labelled volume {Vol} failed", vol.Name); }
+            }
+        }
+        catch (Exception ex) { log.LogWarning(ex, "DestroyByInstance: list labelled volumes for {Id} failed", instanceId); }
     }
 
     /// <summary>
