@@ -19,6 +19,8 @@ services:
     build:
       context: .
       dockerfile: MayFly.Provisioner/Dockerfile
+    environment:
+      Provisioner__Key: "${PROVISIONER_KEY:?set a provisioner key}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -34,6 +36,7 @@ services:
     environment:
       ConnectionStrings__Metadata: "Host=metadata-db;Database=mayfly;Username=mayfly;Password=${MAYFLY_DB_PASSWORD:-mayfly}"
       Provisioner__BaseUrl: "http://provisioner:8080"
+      Provisioner__Key: "${PROVISIONER_KEY:?set a provisioner key}"
       PublicHost: "${PUBLIC_HOST:-localhost}"
     depends_on:
       metadata-db:

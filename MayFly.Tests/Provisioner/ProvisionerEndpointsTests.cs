@@ -13,10 +13,21 @@ public class ProvisionerEndpointsTests : IClassFixture<WebApplicationFactory<May
 {
     private readonly WebApplicationFactory<MayFly.Provisioner.IProvisionerMarker> _factory;
     private readonly HttpClient _client;
+
     public ProvisionerEndpointsTests(WebApplicationFactory<MayFly.Provisioner.IProvisionerMarker> f)
     {
-        _factory = f;
-        _client = f.CreateClient();
+        _factory = f.WithWebHostBuilder(b => b.UseSetting("Provisioner:Key", "test-key"));
+        _client = _factory.CreateClient();
+        _client.DefaultRequestHeaders.Add("X-Provisioner-Key", "test-key");
+    }
+
+    [Fact]
+    public async Task Request_without_key_is_401()
+    {
+        var client = _factory.CreateClient();  // no X-Provisioner-Key header
+        var resp = await client.PostAsJsonAsync("/instances",
+            new CreateInstanceRequest("postgres", 3, 256, "blank"));
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
@@ -39,6 +50,7 @@ public class ProvisionerEndpointsTests : IClassFixture<WebApplicationFactory<May
                 s.RemoveAll(typeof(IDockerProvisioner));
                 s.AddSingleton(mock.Object);
             })).CreateClient();
+        client.DefaultRequestHeaders.Add("X-Provisioner-Key", "test-key");
         var resp = await client.GetAsync("/instances/whatever");
         resp.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
     }

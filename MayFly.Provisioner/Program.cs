@@ -25,6 +25,16 @@ public class Program
         builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
 
         var app = builder.Build();
+
+        var key = builder.Configuration["Provisioner:Key"];
+        app.Use(async (ctx, next) =>
+        {
+            if (!string.IsNullOrEmpty(key) &&
+                ctx.Request.Headers["X-Provisioner-Key"] != key)
+            { ctx.Response.StatusCode = 401; return; }
+            await next();
+        });
+
         app.MapProvisioner();
         app.Run();
     }

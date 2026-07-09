@@ -15,7 +15,10 @@ builder.Services.AddDbContext<MayFlyContext>(o =>
     o.UseNpgsql(builder.Configuration.GetConnectionString("Metadata")));
 
 builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
-    c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080"));
+{
+    c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080");
+    c.DefaultRequestHeaders.Add("X-Provisioner-Key", builder.Configuration["Provisioner:Key"] ?? "");
+});
 
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo("/keys"))
