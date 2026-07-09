@@ -226,7 +226,9 @@ bypass the proxy trust boundary.
 |---|---|
 | TTL reaper | `LifecycleService` destroys instances whose `ExpiresAt` has passed every 30 s |
 | Idempotent destroy | `DestroyAsync` removes the DB container, sidecar, data volume, and init volume; repeated calls succeed |
-| Reconcile on startup | On boot, `LifecycleService.RunReconcileAsync` identifies orphaned containers (live Docker container with no metadata record) and destroys them; and marks metadata records `Failed` if the corresponding container has vanished |
+| Reconcile on startup | On boot, `LifecycleService.RunReconcileAsync` identifies orphaned containers (live Docker container with no metadata record) and destroys them; and marks metadata records `Failed` if the corresponding container has vanished. Reconcile runs at startup, not periodically — a crash mid-reconcile is recovered on the next service restart. |
+| Destroying-state re-drive | Metadata rows left in `Destroying` (process crashed between the state-claim and the provisioner call) are re-driven through `DestroyAsync` on startup reconcile and transitioned to `Destroyed`. |
+| Orphan writer/init-volume sweep | `RunReconcileAsync` calls `SweepOrphansAsync` after each reconcile pass. This force-removes any surviving `mayfly.role=writer` containers (always transient) and any `mayfly-vol-*`, `mayfly-init-*`, or `mayfly.instance`-labelled volumes not belonging to an active instance. This reclaims writer containers and init volumes leaked by a crash in the pre-metadata-write window. |
 | Orphan init-volume cleanup | `DestroyByInstanceAsync` performs a label-based volume sweep (`mayfly.instance=<id>`) to catch the credential-bearing init volume even if the container crashed mid-provision |
 
 ---
@@ -255,6 +257,8 @@ Without XFS+pquota, disk usage falls back to the soft-enforce only
 | **Quota soft-enforce overshoot** — between lifecycle ticks (≤ 30 s), a burst write can exceed quota | Low | XFS hard cap (host prerequisite) eliminates the window; without XFS, up to ~30 s of excess writes are possible |
 | **Limited `CREATE EXTENSION`** — `appuser` can install extensions available in `shared_preload_libraries` | Low | Only `pg_trgm` and `uuid-ossp` are pre-installed by the init script; the server cannot load arbitrary shared libraries |
 | **Socat sidecar trust** — the sidecar image (`alpine/socat:1.8.0.0`) is pinned by tag, not digest | Low | Monitor for tag mutation; future hardening: pin by digest |
+| **Pre-metadata-write crash window** — a crash between init-volume creation and metadata row insert leaves an orphan `mayfly-init-*` volume holding the `appuser` password | Low | The orphan init volume guards a never-created DB (no running postgres, no accessible data). The startup orphan sweep (`SweepOrphansAsync`) reclaims it on next restart. The window is bounded by the time between volume creation and the first successful `ListManagedAsync` call in reconcile. |
+| **Reconcile is startup-only** — a crash mid-reconcile is not retried until the next service restart | Low | Each individual direction (Destroying re-drive, Direction 1, Direction 2, orphan sweep) is wrapped in per-item try/catch and idempotent; a partial reconcile leaves the system in a safe intermediate state that is fully resolved on the subsequent restart. |
 
 ---
 

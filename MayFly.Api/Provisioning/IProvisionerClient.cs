@@ -7,4 +7,5 @@ public interface IProvisionerClient
     Task<ProvisionInspect> InspectAsync(string containerId, CancellationToken ct);
     Task<IReadOnlyList<ManagedContainer>> ListManagedAsync(CancellationToken ct);
     Task DestroyByInstanceAsync(string instanceId, CancellationToken ct);
+    Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct);
 }

@@ -6,3 +6,4 @@ public record CreateInstanceResult(string ContainerId, string VolumeName, string
                                    string AdminUser, string AdminPassword);
 public record InspectResult(string State, long SizeBytes);
 public record ManagedContainerInfo(string ContainerId, string InstanceId);
+public record SweepOrphansRequest(IReadOnlyCollection<string> ActiveVolumeNames);

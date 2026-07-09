@@ -6,3 +6,4 @@ public record ProvisionResult(string ContainerId, string VolumeName, string Inte
 public record ProvisionInspect(string State, long SizeBytes);
 public record ManagedContainer(string ContainerId, string InstanceId);
 internal record CreateBody(string Engine, int TtlHours, int StorageMb, string InitialData);
+internal record SweepOrphansBody(IReadOnlyCollection<string> ActiveVolumeNames);

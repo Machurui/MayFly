@@ -366,6 +366,54 @@ public sealed class DockerProvisioner(
     }
 
     /// <summary>
+    /// Removes all orphan writer containers (labelled <c>mayfly.role=writer</c>) and any
+    /// <c>mayfly-vol-*</c>, <c>mayfly-init-*</c>, or <c>mayfly.instance</c>-labelled volumes
+    /// whose name is not in <paramref name="activeVolumeNames"/>.
+    /// Writer containers are always transient; any survivor of a crashed provision run is an orphan.
+    /// </summary>
+    public async Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct)
+    {
+        // Remove all writer containers — they are transient and never survive a healthy provision.
+        try
+        {
+            var writers = await docker.Containers.ListContainersAsync(new ContainersListParameters
+            {
+                All = true,
+                Filters = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    ["label"] = new Dictionary<string, bool> { ["mayfly.role=writer"] = true }
+                }
+            }, ct);
+
+            foreach (var c in writers)
+            {
+                try { await docker.Containers.RemoveContainerAsync(c.ID, new ContainerRemoveParameters { Force = true }, ct); }
+                catch (Exception ex) { log.LogWarning(ex, "sweep: remove orphan writer {Id} failed", c.ID); }
+            }
+        }
+        catch (Exception ex) { log.LogWarning(ex, "sweep: list orphan writers failed"); }
+
+        // Remove orphan mayfly volumes not in the active set.
+        try
+        {
+            var allVolumes = await docker.Volumes.ListAsync(new VolumesListParameters(), ct);
+            foreach (var vol in allVolumes.Volumes ?? [])
+            {
+                bool isMayfly = vol.Name.StartsWith("mayfly-vol-") ||
+                                vol.Name.StartsWith("mayfly-init-") ||
+                                (vol.Labels?.ContainsKey("mayfly.instance") == true);
+
+                if (isMayfly && !activeVolumeNames.Contains(vol.Name))
+                {
+                    try { await docker.Volumes.RemoveAsync(vol.Name, force: true, ct); }
+                    catch (Exception ex) { log.LogWarning(ex, "sweep: remove orphan volume {Vol} failed", vol.Name); }
+                }
+            }
+        }
+        catch (Exception ex) { log.LogWarning(ex, "sweep: list volumes for orphan sweep failed"); }
+    }
+
+    /// <summary>
     /// Builds an in-memory tar stream containing the Postgres init scripts to be uploaded
     /// into /docker-entrypoint-initdb.d via the init-scripts volume.
     /// </summary>
@@ -461,7 +509,7 @@ public sealed class DockerProvisioner(
                     containerId,
                     new ContainerExecCreateParameters
                     {
-                        Cmd = new List<string> { "pg_isready", "-U", adminUser, "-q" },
+                        Cmd = new List<string> { "pg_isready", "-h", "127.0.0.1", "-U", adminUser, "-q" },
                         AttachStdout = true,
                         AttachStderr = true
                     },

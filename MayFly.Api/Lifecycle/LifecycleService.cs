@@ -30,13 +30,28 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
         var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
         var prov = scope.ServiceProvider.GetRequiredService<IProvisionerClient>();
 
+        // Pre-pass: re-drive rows stuck in Destroying state (crash recovery — DestroyAsync is idempotent)
+        var destroying = await db.Instances
+            .Where(i => i.State == InstanceState.Destroying)
+            .ToListAsync(ct);
+
+        foreach (var inst in destroying)
+        {
+            try { await prov.DestroyAsync(inst.ContainerId, inst.VolumeName, inst.PublicPort, ct); }
+            catch (Exception ex) { log.LogWarning(ex, "reconcile: re-drive Destroying {Id} failed", inst.Id); }
+            inst.State = InstanceState.Destroyed;
+        }
+
+        if (destroying.Count > 0)
+            await db.SaveChangesAsync(ct);
+
         var liveList = await prov.ListManagedAsync(ct);
         var liveContainerIds = liveList.Select(m => m.ContainerId).ToHashSet();
 
         // Direction 1: metadata says active but container not in live set → Failed + release resources
         var active = await db.Instances.Where(i =>
-            i.State == InstanceState.Running || i.State == InstanceState.Provisioning ||
-            i.State == InstanceState.Destroying).ToListAsync(ct);
+            i.State == InstanceState.Running || i.State == InstanceState.Provisioning)
+            .ToListAsync(ct);
 
         foreach (var inst in active.Where(i => !liveContainerIds.Contains(i.ContainerId)))
         {
@@ -56,6 +71,13 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
                 catch (Exception ex) { log.LogWarning(ex, "reconcile: orphan destroy {Id} failed", m.InstanceId); }
             }
         }
+
+        // Sweep orphan writer containers and unmapped mayfly volumes (best-effort)
+        var activeVolumeNames = active
+            .SelectMany(i => new[] { i.VolumeName, i.VolumeName.Replace("mayfly-vol-", "mayfly-init-") })
+            .ToHashSet();
+        try { await prov.SweepOrphansAsync(activeVolumeNames, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "reconcile: orphan sweep failed"); }
     }
 
     public async Task RunOnceAsync(CancellationToken ct)

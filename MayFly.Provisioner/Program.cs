@@ -29,7 +29,7 @@ public class Program
         var key = builder.Configuration["Provisioner:Key"];
         app.Use(async (ctx, next) =>
         {
-            if (!string.IsNullOrEmpty(key) &&
+            if (!string.IsNullOrWhiteSpace(key) &&
                 ctx.Request.Headers["X-Provisioner-Key"] != key)
             { ctx.Response.StatusCode = 401; return; }
             await next();

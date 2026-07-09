@@ -54,4 +54,26 @@ public class ProvisionerEndpointsTests : IClassFixture<WebApplicationFactory<May
         var resp = await client.GetAsync("/instances/whatever");
         resp.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
     }
+
+    [Fact]
+    public async Task SweepOrphans_returns_204_and_delegates_to_provisioner()
+    {
+        var mock = new Mock<IDockerProvisioner>();
+        mock.Setup(p => p.SweepOrphansAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var client = _factory.WithWebHostBuilder(b =>
+            b.ConfigureServices(s =>
+            {
+                s.RemoveAll(typeof(IDockerProvisioner));
+                s.AddSingleton(mock.Object);
+            })).CreateClient();
+        client.DefaultRequestHeaders.Add("X-Provisioner-Key", "test-key");
+
+        var resp = await client.PostAsJsonAsync("/sweep-orphans",
+            new MayFly.Provisioner.Contracts.SweepOrphansRequest(new[] { "mayfly-vol-active1" }));
+        resp.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        mock.Verify(p => p.SweepOrphansAsync(
+            It.Is<IReadOnlyCollection<string>>(v => v.Contains("mayfly-vol-active1")),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

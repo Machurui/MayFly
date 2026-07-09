@@ -8,4 +8,5 @@ public interface IDockerProvisioner
     Task<InspectResult> InspectAsync(string containerId, CancellationToken ct);
     Task<IReadOnlyList<ManagedContainerInfo>> ListManagedAsync(CancellationToken ct);
     Task DestroyByInstanceAsync(string instanceId, CancellationToken ct);
+    Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct);
 }

@@ -38,5 +38,11 @@ public static class ProvisionerEndpoints
             await p.DestroyByInstanceAsync(instanceId, ct);
             return Results.NoContent();
         });
+
+        app.MapPost("/sweep-orphans", async (SweepOrphansRequest req, IDockerProvisioner p, CancellationToken ct) =>
+        {
+            await p.SweepOrphansAsync(req.ActiveVolumeNames, ct);
+            return Results.NoContent();
+        });
     }
 }

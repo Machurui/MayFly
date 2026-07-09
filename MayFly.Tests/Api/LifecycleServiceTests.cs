@@ -60,6 +60,57 @@ public class LifecycleServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reconcile_redrives_Destroying_row_and_sweeps_orphans()
+    {
+        // Arrange: a row stuck in Destroying state (simulates a crash between claim and provisioner call).
+        // ListManagedAsync returns empty (DB container is already gone).
+        var services = new ServiceCollection();
+        services.AddDbContext<MayFlyContext>(o => o.UseNpgsql(_db.GetConnectionString()));
+        var prov = new Mock<IProvisionerClient>();
+        prov.Setup(p => p.ListManagedAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ManagedContainer>());
+        prov.Setup(p => p.DestroyAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        prov.Setup(p => p.SweepOrphansAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        services.AddSingleton(prov.Object);
+        services.AddScoped(_ => Mock.Of<IQueryExecutor>());
+        var sp = services.BuildServiceProvider();
+
+        using (var scope = sp.CreateScope())
+        {
+            var ctx = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
+            ctx.Database.EnsureCreated();
+            ctx.Instances.Add(new Instance
+            {
+                CapabilityToken = "y", ContainerId = "d-container-xyz", VolumeName = "mayfly-vol-abc123",
+                PublicPort = 20077, State = InstanceState.Destroying,
+                CreatedAt = DateTime.UtcNow.AddHours(-2), ExpiresAt = DateTime.UtcNow.AddHours(1)
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var sut = new LifecycleService(sp.GetRequiredService<IServiceScopeFactory>(),
+            Mock.Of<ILogger<LifecycleService>>());
+
+        // Act
+        await sut.RunReconcileAsync(default);
+
+        // Assert: row became Destroyed and DestroyAsync was called exactly once
+        using var verify = sp.CreateScope();
+        var db = verify.ServiceProvider.GetRequiredService<MayFlyContext>();
+        (await db.Instances.SingleAsync()).State.Should().Be(InstanceState.Destroyed);
+        prov.Verify(p => p.DestroyAsync("d-container-xyz", "mayfly-vol-abc123", 20077,
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        // SweepOrphansAsync should be called; the Destroying instance's volume must NOT be in the active set
+        // (it was Destroyed in the pre-pass, so active = Running/Provisioning only, which is empty here)
+        prov.Verify(p => p.SweepOrphansAsync(
+            It.Is<IReadOnlyCollection<string>>(v => !v.Contains("mayfly-vol-abc123")),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Reaper_destroys_expired_and_marks_state()
     {
         var services = new ServiceCollection();

@@ -37,4 +37,10 @@ public sealed class ProvisionerClient(HttpClient http) : IProvisionerClient
         var resp = await http.DeleteAsync($"/managed/{instanceId}", ct);
         resp.EnsureSuccessStatusCode();
     }
+
+    public async Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct)
+    {
+        var resp = await http.PostAsJsonAsync("/sweep-orphans", new SweepOrphansBody(activeVolumeNames), ct);
+        resp.EnsureSuccessStatusCode();
+    }
 }
