@@ -25,6 +25,7 @@ builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
 builder.Services.AddScoped<DashboardService>();
+builder.Services.AddScoped<QuotaEnforcer>();
 builder.Services.AddHostedService<LifecycleService>();
 
 builder.Services.AddControllers();

@@ -64,6 +64,7 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
         var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
         var prov = scope.ServiceProvider.GetRequiredService<IProvisionerClient>();
         var queryExec = scope.ServiceProvider.GetRequiredService<IQueryExecutor>();
+        var enforcer = scope.ServiceProvider.GetService<QuotaEnforcer>();
         var now = DateTime.UtcNow;
 
         // Reaper: destroy expired instances in Provisioning or Running state
@@ -90,7 +91,14 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
             {
                 var result = await queryExec.ExecuteAsync(inst, "SELECT pg_database_size(current_database())", ct);
                 if (result.Success && result.Rows.Count == 1 && result.Rows[0].Length == 1)
+                {
                     inst.LastSizeBytes = Convert.ToInt64(result.Rows[0][0]);
+                    if (enforcer is not null)
+                    {
+                        try { await enforcer.EnforceAsync(inst, inst.LastSizeBytes, ct); }
+                        catch (Exception ex) { log.LogWarning(ex, "quota enforce {Id} failed", inst.Id); }
+                    }
+                }
             }
             catch (Exception ex) { log.LogDebug(ex, "size check {Id} failed", inst.Id); }
         }
