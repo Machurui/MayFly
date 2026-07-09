@@ -1,6 +1,7 @@
 using Docker.DotNet;
 using MayFly.Provisioner.Docker;
 using MayFly.Provisioner.Endpoints;
+using MayFly.Provisioner.Engines;
 
 namespace MayFly.Provisioner;
 
@@ -22,6 +23,7 @@ public class Program
             return useXfs ? new XfsVolumeProvisioner(d) : (IVolumeProvisioner)new PlainVolumeProvisioner(d);
         });
 
+        builder.Services.AddSingleton<IEngineProvider, PostgresEngineProvider>();
         builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
 
         var app = builder.Build();

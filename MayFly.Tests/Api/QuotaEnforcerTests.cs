@@ -5,6 +5,7 @@ using MayFly.Api.Lifecycle;
 using MayFly.Api.Security;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
+using MayFly.Provisioner.Engines;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,6 +23,7 @@ public class QuotaEnforcerTests
         var prov = new DockerProvisioner(docker,
             new PortAllocator(Array.Empty<int>()),
             new PlainVolumeProvisioner(docker),
+            new[] { new PostgresEngineProvider() },
             NullLogger<DockerProvisioner>.Instance);
 
         var r = await prov.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);

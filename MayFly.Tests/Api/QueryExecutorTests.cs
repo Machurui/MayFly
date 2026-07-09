@@ -5,6 +5,7 @@ using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
+using MayFly.Provisioner.Engines;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,7 +20,8 @@ public class QueryExecutorTests
     {
         var docker = new DockerClientBuilder().Build();
         var prov = new DockerProvisioner(docker, new PortAllocator(Array.Empty<int>()),
-            new PlainVolumeProvisioner(docker), NullLogger<DockerProvisioner>.Instance);
+            new PlainVolumeProvisioner(docker), new[] { new PostgresEngineProvider() },
+            NullLogger<DockerProvisioner>.Instance);
         var r = await prov.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);
         var secrets = new SecretProtector(DataProtectionProvider.Create("t"));
         var inst = new Instance

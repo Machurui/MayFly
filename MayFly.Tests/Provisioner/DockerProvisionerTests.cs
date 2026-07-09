@@ -4,6 +4,7 @@ using Docker.DotNet.Models;
 using FluentAssertions;
 using MayFly.Provisioner.Contracts;
 using MayFly.Provisioner.Docker;
+using MayFly.Provisioner.Engines;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
@@ -32,6 +33,7 @@ public class DockerProvisionerLifecycleTests
         return new DockerProvisioner(docker,
             new PortAllocator(Array.Empty<int>()),
             new PlainVolumeProvisioner(docker),
+            new[] { new PostgresEngineProvider() },
             NullLogger<DockerProvisioner>.Instance);
     }
 
