@@ -1,13 +1,14 @@
 using System.Diagnostics;
 using MayFly.Api.Domain;
 using MayFly.Api.Dtos;
+using MayFly.Api.Engines;
 using MayFly.Api.Security;
 using Microsoft.Extensions.Configuration;
-using Npgsql;
 
 namespace MayFly.Api.Services;
 
-public sealed class QueryExecutor(ISecretProtector secrets, IConfiguration cfg) : IQueryExecutor
+public sealed class QueryExecutor(ISecretProtector secrets, IConfiguration cfg, EngineClientRegistry registry)
+    : IQueryExecutor
 {
     private const int RowCap = 500;
     private const int TimeoutSeconds = 10;
@@ -16,20 +17,19 @@ public sealed class QueryExecutor(ISecretProtector secrets, IConfiguration cfg) 
     {
         var sw = Stopwatch.StartNew();
         var useInternal = cfg.GetValue("QueryExecutor:UseInternalHost", true);
+        var client = registry.For(inst.Engine);
         var host = useInternal ? inst.InternalHost : "localhost";
-        var port = useInternal ? 5432 : inst.PublicPort;
-        var cs = new NpgsqlConnectionStringBuilder
-        {
-            Host = host, Port = port, Database = inst.DbName, Username = inst.DbUser,
-            Password = secrets.Unprotect(inst.DbPasswordEnc),
-            Timeout = 5, CommandTimeout = TimeoutSeconds
-        }.ToString();
+        var port = useInternal ? client.Port : inst.PublicPort;
+        var cs = client.BuildAdoConnectionString(host, port, inst.DbName, inst.DbUser,
+            secrets.Unprotect(inst.DbPasswordEnc));
 
         try
         {
-            await using var conn = new NpgsqlConnection(cs);
+            await using var conn = client.CreateConnection(cs);
             await conn.OpenAsync(ct);
-            await using var cmd = new NpgsqlCommand(sql, conn) { CommandTimeout = TimeoutSeconds };
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = TimeoutSeconds;
             await using var reader = await cmd.ExecuteReaderAsync(ct);
 
             if (!reader.HasRows && reader.FieldCount == 0)

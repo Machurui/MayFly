@@ -1,6 +1,7 @@
 using Docker.DotNet;
 using FluentAssertions;
 using MayFly.Api.Domain;
+using MayFly.Api.Engines;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Provisioner.Contracts;
@@ -26,6 +27,7 @@ public class QueryExecutorTests
         var secrets = new SecretProtector(DataProtectionProvider.Create("t"));
         var inst = new Instance
         {
+            Engine = "postgres",
             InternalHost = r.InternalHost, PublicPort = r.PublicPort, DbName = r.DbName,
             DbUser = r.DbUser, DbPasswordEnc = secrets.Protect(r.DbPassword)
         };
@@ -34,7 +36,8 @@ public class QueryExecutorTests
             // dev mode: connect via localhost public port
             var cfg = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?> { ["QueryExecutor:UseInternalHost"] = "false" }).Build();
-            var sut = new QueryExecutor(secrets, cfg);
+            var registry = new EngineClientRegistry(new IEngineClient[] { new PostgresEngineClient() });
+            var sut = new QueryExecutor(secrets, cfg, registry);
             await WaitReady(sut, inst);
 
             var res = await sut.ExecuteAsync(inst, "SELECT 1 AS n", default);

@@ -1,6 +1,7 @@
 using MayFly.Api.Data;
 using MayFly.Api.Domain;
 using MayFly.Api.Dtos;
+using MayFly.Api.Engines;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Api.Validation;
@@ -13,12 +14,16 @@ namespace MayFly.Api.Controllers;
 [Route("api/instances")]
 public sealed class InstancesController(
     IInstanceService instances, IQueryExecutor queryExec, ISecretProtector secrets, IConfiguration cfg,
-    MayFlyContext db)
+    MayFlyContext db, EngineClientRegistry registry)
     : ControllerBase
 {
     private string PublicHost => cfg["PublicHost"] ?? "localhost";
     private string Sid => HttpContext.Items[SessionCookieMiddleware.CookieName] as string ?? "";
     private string Ip => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "0.0.0.0";
+
+    private string DisplayCs(Instance i) =>
+        registry.For(i.Engine).BuildDisplayConnectionString(
+            PublicHost, i.PublicPort, i.DbName, i.DbUser, secrets.Unprotect(i.DbPasswordEnc));
 
     [HttpPost]
     [EnableRateLimiting("create")]
@@ -31,7 +36,7 @@ public sealed class InstancesController(
         if (outcome.QuotaExceeded) return StatusCode(429, new { error = "IP quota of 3 active databases reached" });
         var inst = outcome.Instance!;
         return CreatedAtAction(nameof(GetByToken), new { token = inst.CapabilityToken },
-            InstanceDto.From(inst, PublicHost, secrets.Unprotect(inst.DbPasswordEnc)));
+            InstanceDto.From(inst, DisplayCs(inst)));
     }
 
     [HttpGet("{token}")]
@@ -39,14 +44,14 @@ public sealed class InstancesController(
     {
         var inst = await instances.GetByTokenAsync(token, ct);
         return inst is null ? NotFound()
-            : Ok(InstanceDto.From(inst, PublicHost, secrets.Unprotect(inst.DbPasswordEnc)));
+            : Ok(InstanceDto.From(inst, DisplayCs(inst)));
     }
 
     [HttpGet]
     public async Task<IActionResult> ListMine(CancellationToken ct)
     {
         var list = await instances.ListBySessionAsync(Sid, ct);
-        return Ok(list.Select(i => InstanceDto.From(i, PublicHost, secrets.Unprotect(i.DbPasswordEnc))));
+        return Ok(list.Select(i => InstanceDto.From(i, DisplayCs(i))));
     }
 
     [HttpDelete("{token}")]

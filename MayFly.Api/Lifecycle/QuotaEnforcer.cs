@@ -1,14 +1,15 @@
 using System.Text.RegularExpressions;
 using MayFly.Api.Domain;
+using MayFly.Api.Engines;
 using MayFly.Api.Security;
-using Npgsql;
 
 namespace MayFly.Api.Lifecycle;
 
-public sealed class QuotaEnforcer(ISecretProtector secrets, IConfiguration cfg, ILogger<QuotaEnforcer> log)
+public sealed class QuotaEnforcer(
+    ISecretProtector secrets, IConfiguration cfg, ILogger<QuotaEnforcer> log,
+    EngineClientRegistry registry)
 {
     private static readonly Regex SafeIdentifier = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
-    private const string AdminUser = "mayflyadmin";
 
     public async Task EnforceAsync(Instance inst, long sizeBytes, CancellationToken ct)
     {
@@ -19,24 +20,17 @@ public sealed class QuotaEnforcer(ISecretProtector secrets, IConfiguration cfg, 
                 $"DbUser '{inst.DbUser}' contains unsafe characters and cannot be used as an identifier.");
 
         var useInternal = cfg.GetValue("QueryExecutor:UseInternalHost", true);
+        var client = registry.For(inst.Engine);
         var host = useInternal ? inst.InternalHost : "localhost";
-        var port = useInternal ? 5432 : inst.PublicPort;
+        var port = useInternal ? client.Port : inst.PublicPort;
 
-        var cs = new NpgsqlConnectionStringBuilder
-        {
-            Host = host,
-            Port = port,
-            Database = inst.DbName,
-            Username = AdminUser,
-            Password = secrets.Unprotect(inst.AdminPasswordEnc),
-            Timeout = 5,
-            CommandTimeout = 10
-        }.ToString();
+        var cs = client.BuildAdoConnectionString(host, port, inst.DbName, inst.AdminUser,
+            secrets.Unprotect(inst.AdminPasswordEnc));
 
-        await using var conn = new NpgsqlConnection(cs);
+        await using var conn = client.CreateConnection(cs);
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            $"ALTER ROLE {inst.DbUser} SET default_transaction_read_only = on", conn);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = client.SoftEnforceReadOnlySql(inst.DbUser, inst.DbName);
         await cmd.ExecuteNonQueryAsync(ct);
 
         log.LogInformation(

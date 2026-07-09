@@ -1,4 +1,5 @@
 using MayFly.Api.Data;
+using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
@@ -25,6 +26,8 @@ builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo("/keys"))
     .SetApplicationName("MayFly");
+builder.Services.AddSingleton<IEngineClient, PostgresEngineClient>();
+builder.Services.AddSingleton<EngineClientRegistry>();
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();

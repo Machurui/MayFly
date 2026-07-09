@@ -1,6 +1,7 @@
 using FluentAssertions;
 using MayFly.Api.Data;
 using MayFly.Api.Domain;
+using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Services;
@@ -45,8 +46,9 @@ public class LifecycleServiceTests : IAsyncLifetime
             await ctx.SaveChangesAsync();
         }
 
+        var registry = new EngineClientRegistry(new IEngineClient[] { new PostgresEngineClient() });
         var sut = new LifecycleService(sp.GetRequiredService<IServiceScopeFactory>(),
-            Mock.Of<ILogger<LifecycleService>>());
+            Mock.Of<ILogger<LifecycleService>>(), registry);
 
         // Act
         await sut.RunReconcileAsync(default);
@@ -90,8 +92,9 @@ public class LifecycleServiceTests : IAsyncLifetime
             await ctx.SaveChangesAsync();
         }
 
+        var registry = new EngineClientRegistry(new IEngineClient[] { new PostgresEngineClient() });
         var sut = new LifecycleService(sp.GetRequiredService<IServiceScopeFactory>(),
-            Mock.Of<ILogger<LifecycleService>>());
+            Mock.Of<ILogger<LifecycleService>>(), registry);
 
         // Act
         await sut.RunReconcileAsync(default);
@@ -133,8 +136,9 @@ public class LifecycleServiceTests : IAsyncLifetime
             await ctx.SaveChangesAsync();
         }
 
+        var registry = new EngineClientRegistry(new IEngineClient[] { new PostgresEngineClient() });
         var sut = new LifecycleService(sp.GetRequiredService<IServiceScopeFactory>(),
-            Mock.Of<ILogger<LifecycleService>>());
+            Mock.Of<ILogger<LifecycleService>>(), registry);
         await sut.RunOnceAsync(default);
 
         using var verify = sp.CreateScope();

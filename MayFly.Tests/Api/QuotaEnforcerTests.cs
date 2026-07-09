@@ -1,6 +1,7 @@
 using Docker.DotNet;
 using FluentAssertions;
 using MayFly.Api.Domain;
+using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
 using MayFly.Api.Security;
 using MayFly.Provisioner.Contracts;
@@ -38,11 +39,13 @@ public class QuotaEnforcerTests
             var secrets = new SecretProtector(DataProtectionProvider.Create("t"));
             var inst = new Instance
             {
+                Engine = "postgres",
                 InternalHost = r.InternalHost,
                 PublicPort = r.PublicPort,
                 DbName = r.DbName,
                 DbUser = r.DbUser,
                 DbPasswordEnc = secrets.Protect(r.DbPassword),
+                AdminUser = r.AdminUser,
                 AdminPasswordEnc = secrets.Protect(r.AdminPassword),
                 StorageQuotaMb = 256
             };
@@ -50,7 +53,8 @@ public class QuotaEnforcerTests
             // Configure enforcer to use localhost:PublicPort (not internal host)
             var cfg = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?> { ["QueryExecutor:UseInternalHost"] = "false" }).Build();
-            var enforcer = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance);
+            var registry = new EngineClientRegistry(new IEngineClient[] { new PostgresEngineClient() });
+            var enforcer = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance, registry);
 
             // Enforce: 999_999_999 bytes >> 256 MiB quota
             await enforcer.EnforceAsync(inst, 999_999_999, default);

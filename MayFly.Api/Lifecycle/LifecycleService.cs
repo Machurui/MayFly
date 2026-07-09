@@ -1,12 +1,14 @@
 using MayFly.Api.Data;
 using MayFly.Api.Domain;
+using MayFly.Api.Engines;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace MayFly.Api.Lifecycle;
 
-public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<LifecycleService> log)
+public sealed class LifecycleService(
+    IServiceScopeFactory scopes, ILogger<LifecycleService> log, EngineClientRegistry registry)
     : BackgroundService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
@@ -111,7 +113,7 @@ public sealed class LifecycleService(IServiceScopeFactory scopes, ILogger<Lifecy
         {
             try
             {
-                var result = await queryExec.ExecuteAsync(inst, "SELECT pg_database_size(current_database())", ct);
+                var result = await queryExec.ExecuteAsync(inst, registry.For(inst.Engine).SizeQuerySql(inst.DbName), ct);
                 if (result.Success && result.Rows.Count == 1 && result.Rows[0].Length == 1)
                 {
                     inst.LastSizeBytes = Convert.ToInt64(result.Rows[0][0]);
