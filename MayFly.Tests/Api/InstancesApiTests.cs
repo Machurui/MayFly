@@ -33,4 +33,13 @@ public class InstancesApiTests : IClassFixture<MayFlyWebFactory>
             new { engine = "oracle", ttlHours = 3, storageMb = 256, initialData = "blank" });
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    [Fact]
+    public async Task Create_endpoint_still_reachable_under_create_policy()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.PostAsJsonAsync("/api/instances",
+            new { engine = "oracle", ttlHours = 3, storageMb = 256, initialData = "blank" });
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
 }

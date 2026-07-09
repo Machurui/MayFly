@@ -5,6 +5,7 @@ using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Api.Validation;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace MayFly.Api.Controllers;
 
@@ -20,6 +21,7 @@ public sealed class InstancesController(
     private string Ip => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "0.0.0.0";
 
     [HttpPost]
+    [EnableRateLimiting("create")]
     public async Task<IActionResult> Create([FromBody] CreateInstanceDto dto, CancellationToken ct)
     {
         var (ok, error) = ApiSpecValidator.Validate(dto);
@@ -52,6 +54,7 @@ public sealed class InstancesController(
         => await instances.DestroyAsync(token, ct) ? NoContent() : NotFound();
 
     [HttpPost("{token}/query")]
+    [EnableRateLimiting("query")]
     public async Task<IActionResult> Query(string token, [FromBody] QueryRequestDto body, CancellationToken ct)
     {
         var inst = await instances.GetByTokenAsync(token, ct);

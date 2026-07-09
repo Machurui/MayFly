@@ -33,14 +33,33 @@ builder.Services.AddHostedService<LifecycleService>();
 
 builder.Services.AddControllers();
 
-builder.Services.AddRateLimiter(o => o.AddPolicy("perip", ctx =>
-    RateLimitPartition.GetFixedWindowLimiter(
-        partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
-        factory: _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 60,
-            Window = TimeSpan.FromMinutes(1)
-        })));
+builder.Services.AddRateLimiter(o =>
+{
+    o.AddPolicy("perip", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+    o.AddPolicy("create", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 6,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+    o.AddPolicy("query", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+});
 
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
