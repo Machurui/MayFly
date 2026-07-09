@@ -350,7 +350,7 @@ public sealed class DockerProvisioner : IDockerProvisioner
             string? volumeName = c.Mounts?.FirstOrDefault(m => m.Type == "volume")?.Name;
             // The sidecar holds the host port binding; the DB no longer publishes any port.
             int port = 0;
-            var portEntry = c.Ports?.FirstOrDefault(p => p.PrivatePort == 5432 && p.PublicPort > 0);
+            var portEntry = c.Ports?.FirstOrDefault(p => p.PublicPort > 0);
             if (portEntry?.PublicPort is ushort pp) port = pp;
 
             try
