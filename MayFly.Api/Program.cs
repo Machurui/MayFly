@@ -18,6 +18,8 @@ builder.Services.AddHttpClient<IProvisionerClient, ProvisionerClient>(c =>
 {
     c.BaseAddress = new Uri(builder.Configuration["Provisioner:BaseUrl"] ?? "http://provisioner:8080");
     c.DefaultRequestHeaders.Add("X-Provisioner-Key", builder.Configuration["Provisioner:Key"] ?? "");
+    // Northwind seeding via init-scripts can take ~60 s; allow 180 s for the full create flow.
+    c.Timeout = TimeSpan.FromSeconds(180);
 });
 
 builder.Services.AddDataProtection()

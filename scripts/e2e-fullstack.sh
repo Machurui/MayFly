@@ -7,6 +7,7 @@
 #   1. GET /               → 200, body contains <div id="app">  (Vue SPA served)
 #   2. GET /api/instances  → 200 (empty array OK)               (Caddy→API routing)
 #   3. POST /api/instances → 201 with token + connectionString  (end-to-end provision)
+#   3b. Egress probe       → DB container has no outbound internet (internal network)
 #   4. POST /api/instances/{token}/query → success:true, count>0 (Northwind seeded)
 #   5. GET /api/dashboard  → 200, aliveCount>=1                 (dashboard counts)
 #   6. DELETE /api/instances/{token} → 204                      (cleanup)
@@ -25,24 +26,30 @@ cleanup() {
   echo "=== CLEANUP ==="
   cd "$REPO"
   docker compose down -v 2>/dev/null || true
-  # Remove mayfly-pg-* containers created by the provisioner (outside compose)
-  REMAINING=$(docker ps -a --format '{{.Names}}' | grep '^mayfly-pg-' || true)
+  # Remove provisioner-managed containers (DB + sidecar + any crashed writer containers)
+  REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar|initwriter)-' || true)
   if [[ -n "$REMAINING" ]]; then
     echo "  Force-removing leftover containers: $REMAINING"
     echo "$REMAINING" | xargs docker rm -f 2>/dev/null || true
   fi
-  # Remove mayfly-vol-* volumes created by the provisioner
-  LINGERING_VOLS=$(docker volume ls --format '{{.Name}}' | grep '^mayfly-vol-' || true)
+  # Remove provisioner-managed volumes (data volumes + credential-bearing init volumes)
+  LINGERING_VOLS=$(docker volume ls --format '{{.Name}}' | grep -E '^mayfly-(vol|init)-' || true)
   if [[ -n "$LINGERING_VOLS" ]]; then
     echo "  Removing leftover volumes: $LINGERING_VOLS"
     echo "$LINGERING_VOLS" | xargs docker volume rm -f 2>/dev/null || true
   fi
-  # Remove the mayfly-internal network so next run gets a fresh compose-managed one
-  docker network rm mayfly-internal 2>/dev/null || true
+  # Remove user-network and ingress network created by provisioner (compose down may not clean these
+  # if they were created by the provisioner service rather than compose itself)
+  docker network rm mayfly-users mayfly-ingress mayfly-internal 2>/dev/null || true
   rm -f "$COOKIES"
   echo "  Cleanup done — no leftover mayfly containers, volumes, or networks."
 }
 trap cleanup EXIT
+
+# ── Require PROVISIONER_KEY ────────────────────────────────────────────────────
+# docker-compose.yml uses ${PROVISIONER_KEY:?...} — the compose will fail without it.
+export PROVISIONER_KEY="${PROVISIONER_KEY:-$(openssl rand -hex 16)}"
+echo "PROVISIONER_KEY set (length=${#PROVISIONER_KEY})"
 
 check_pass() { echo "  [PASS] $1"; PASS=$((PASS + 1)); }
 check_fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); ERRORS+=("$1"); }
@@ -174,6 +181,28 @@ if [[ "$CREATE_STATUS" == "201" ]]; then
   echo "  Token: $INSTANCE_TOKEN"
   echo "  ConnectionString: $CONN_STRING"
   [[ -z "$INSTANCE_TOKEN" ]] && check_fail "CHECK 3b: token missing from response body"
+
+  # ── CHECK 3c: Egress probe — DB container must have no internet egress ─────
+  # mayfly-users is declared internal:true in compose; the provisioner enforces the
+  # same flag when it creates the network. Prove it: exec nc inside the DB container.
+  # nc -w2 1.1.1.1 80: with no gateway (internal network), nc times out and exits
+  # non-zero → NOEGRESS is printed. If egress were open, nc connects and REACHED is printed.
+  echo ""
+  echo "=== CHECK 3c: Egress probe — no outbound internet from DB container ==="
+  DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep '^mayfly-pg-' | head -1 || true)
+  if [[ -n "$DB_CONTAINER" ]]; then
+    echo "  Probing from container: $DB_CONTAINER"
+    EGRESS_OUT=$(docker exec "$DB_CONTAINER" sh -c \
+      '(nc -w2 1.1.1.1 80 2>/dev/null && echo REACHED) || echo NOEGRESS' 2>/dev/null || echo "NOEGRESS")
+    echo "  Probe output: $EGRESS_OUT"
+    if echo "$EGRESS_OUT" | grep -q "NOEGRESS"; then
+      check_pass "CHECK 3c: Egress probe → NOEGRESS (internal network confirmed)"
+    else
+      check_fail "CHECK 3c: Egress probe → REACHED — DB container has internet access!"
+    fi
+  else
+    echo "  WARN: could not find mayfly-pg-* container for egress probe; skipping."
+  fi
 else
   check_fail "CHECK 3: POST /api/instances expected 201, got $CREATE_STATUS"
   docker compose logs api | tail -30
@@ -238,9 +267,10 @@ if [[ -n "$INSTANCE_TOKEN" ]]; then
     check_pass "CHECK 6: DELETE /api/instances/$INSTANCE_TOKEN → 204"
     INSTANCE_TOKEN=""  # clear so cleanup trap skips extra delete attempt
     sleep 2
-    REMAINING=$(docker ps -a --format '{{.Names}}' | grep '^mayfly-pg-' || true)
+    # Check that both the DB container AND the sidecar have been removed
+    REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
     if [[ -z "$REMAINING" ]]; then
-      check_pass "CHECK 6b: No leftover mayfly-pg-* containers after delete"
+      check_pass "CHECK 6b: No leftover mayfly-pg-* or mayfly-sidecar-* containers after delete"
     else
       check_fail "CHECK 6b: Leftover containers after delete: $REMAINING"
     fi

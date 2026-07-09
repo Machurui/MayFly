@@ -178,6 +178,12 @@ public sealed class DockerProvisioner(
 
             await docker.Containers.StartContainerAsync(sidecarId, new ContainerStartParameters(), ct);
 
+            // Wait for PostgreSQL to accept connections. With init-scripts, Postgres runs role
+            // setup and optional seeding before it opens port 5432. We poll pg_isready via
+            // Docker exec (no network access required) so that the API only returns 201 after
+            // the DB is genuinely ready to serve queries.
+            await WaitForPostgresReadyAsync(containerId, adminUser, ct);
+
             return new CreateInstanceResult(containerId, volume!, name, port, dbName,
                 DbUser: appUser, DbPassword: appPassword,
                 AdminUser: adminUser, AdminPassword: adminPassword);
@@ -436,6 +442,52 @@ public sealed class DockerProvisioner(
         await docker.Images.CreateImageAsync(
             new ImagesCreateParameters { FromImage = "alpine/socat", Tag = "1.8.0.0" },
             null, new Progress<JSONMessage>(), ct);
+    }
+
+    /// <summary>
+    /// Polls pg_isready inside the DB container via Docker exec until Postgres accepts
+    /// connections (exit code 0) or the timeout elapses.
+    /// This is needed because init-scripts run before port 5432 opens: without this wait
+    /// the API would return 201 before the DB is ready to serve queries.
+    /// </summary>
+    private async Task WaitForPostgresReadyAsync(string containerId, string adminUser, CancellationToken ct)
+    {
+        const int maxAttempts = 75;   // 75 × 2 s = 150 s ceiling (Northwind seeding ~60 s)
+        for (int i = 0; i < maxAttempts; i++)
+        {
+            try
+            {
+                var execCreate = await docker.Exec.CreateContainerExecAsync(
+                    containerId,
+                    new ContainerExecCreateParameters
+                    {
+                        Cmd = new List<string> { "pg_isready", "-U", adminUser, "-q" },
+                        AttachStdout = true,
+                        AttachStderr = true
+                    },
+                    ct);
+
+                using var execStream = await docker.Exec.StartContainerExecAsync(
+                    execCreate.ID,
+                    new ContainerExecStartParameters { Detach = false },
+                    ct);
+                // Drain the stream so the exec completes
+                await execStream.CopyOutputToAsync(Stream.Null, Stream.Null, Stream.Null, ct);
+
+                var inspect = await docker.Exec.InspectContainerExecAsync(execCreate.ID, ct);
+                if (inspect.ExitCode == 0)
+                {
+                    log.LogInformation("PostgreSQL ready in container {Id} after {Attempt} poll(s)", containerId, i + 1);
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogDebug(ex, "pg_isready poll {Attempt} failed; retrying", i + 1);
+            }
+            await Task.Delay(2000, ct);
+        }
+        throw new TimeoutException($"PostgreSQL in container {containerId} did not accept connections within 150 s");
     }
 
     private async Task EnsureNetworksAsync(CancellationToken ct)
