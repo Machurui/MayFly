@@ -21,6 +21,9 @@ public class MySqlEngineClient : IEngineClient
             Password = password,
             ConnectionTimeout = 5,
             DefaultCommandTimeout = 10,
+            // SslMode=None and AllowPublicKeyRetrieval are deliberate: traffic runs over the
+            // internal mayfly-users network (no PKI); AllowPublicKeyRetrieval is required for
+            // MySQL 8 caching_sha2_password over a non-TLS connection.
             AllowPublicKeyRetrieval = true,
             SslMode = MySqlSslMode.None
         }.ToString();

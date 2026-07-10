@@ -48,6 +48,9 @@ describe('buildSnippets – postgres', () => {
     expect(s.go).toContain('pgx.Connect')
   })
   it('dotnet uses Npgsql connection string', () => expect(s.dotnet).toContain('Host=db.example.com'))
+  it('password appears in a representative snippet', () => {
+    expect(s.dotnet).toContain('secret')
+  })
 })
 
 describe('buildSnippets – mysql', () => {
@@ -87,6 +90,9 @@ describe('buildSnippets – mysql', () => {
     expect(s.dotnet).toContain('appuser')
     expect(s.dotnet).toContain('appdb')
   })
+  it('password appears in a representative snippet', () => {
+    expect(s.dotnet).toContain('pw')
+  })
 })
 
 describe('buildSnippets – mariadb', () => {
@@ -94,6 +100,7 @@ describe('buildSnippets – mariadb', () => {
   it('bash uses mysql CLI', () => {
     expect(s.bash).toContain('mysql')
     expect(s.bash).toContain('localhost')
+    expect(s.bash).toContain('3306')
     expect(s.bash).toContain('appuser')
     expect(s.bash).toContain('appdb')
   })
@@ -120,6 +127,9 @@ describe('buildSnippets – mariadb', () => {
     expect(s.dotnet).toContain('localhost')
     expect(s.dotnet).toContain('appuser')
     expect(s.dotnet).toContain('appdb')
+  })
+  it('password appears in a representative snippet', () => {
+    expect(s.dotnet).toContain('pw')
   })
 })
 
@@ -162,5 +172,8 @@ describe('buildSnippets – mssql', () => {
     expect(s.dotnet).toContain('1433')
     expect(s.dotnet).toContain('appuser')
     expect(s.dotnet).toContain('appdb')
+  })
+  it('password appears in a representative snippet', () => {
+    expect(s.dotnet).toContain('pw')
   })
 })

@@ -58,7 +58,7 @@ DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES` on the instance database
 only; no `FILE`, `SUPER`, or `PROCESS` privilege.
 
 **SQL Server** — there is no init-script path; setup runs after readiness
-via `docker exec sqlcmd` (see §4.4). `appuser` is a SQL Server Login mapped
+via `docker exec sqlcmd` (see §4.3). `appuser` is a SQL Server Login mapped
 to a database user with `db_datareader`, `db_datawriter`, and `db_ddladmin`
 roles on `appdb`. It has no server-level (`sysadmin`, `securityadmin`)
 privileges.
@@ -117,6 +117,12 @@ The sidecar is removed by `DestroyAsync` alongside the DB container.
 `MayFly.Api` is a member of both `mayfly-internal` (to reach the
 Provisioner and metadata DB) and `mayfly-users` (to execute queries
 against user DBs). It is not a member of `mayfly-ingress`.
+
+Api↔DB traffic runs over the internal `mayfly-users` network and uses
+plain TCP (Postgres), `SslMode=None` (MySQL/MariaDB), and
+`Encrypt=Optional` + `TrustServerCertificate` (SQL Server) by design —
+encryption is opportunistic on an isolated network with no PKI, consistent
+across engines.
 
 ---
 
@@ -189,9 +195,10 @@ configured on the host before starting MayFly (see Section 8).
 Independently of XFS, the `QuotaEnforcer` runs during each lifecycle
 tick and queries the engine-appropriate size function via the `appuser`
 connection (`pg_database_size` for postgres; `information_schema` for
-MySQL/MariaDB; `sys.dm_db_file_space_usage` for SQL Server). When the
+MySQL/MariaDB; `sys.master_files` for SQL Server). When the
 returned size meets or exceeds `StorageQuotaMb`, the enforcer connects
-as the admin credential and flips `appuser` to read-only.
+as the admin credential and flips the app user — or, for SQL Server, the
+database itself — to read-only.
 
 For **PostgreSQL**:
 ```sql
@@ -200,23 +207,21 @@ ALTER ROLE appuser SET default_transaction_read_only = on;
 
 For **MySQL / MariaDB**:
 ```sql
-REVOKE INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES
+REVOKE INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX
   ON `appdb`.* FROM 'appuser'@'%';
 FLUSH PRIVILEGES;
 ```
 
-For **SQL Server**, quota enforcement is executed via `docker exec sqlcmd`:
+For **SQL Server**:
 ```sql
-ALTER LOGIN [appuser] DISABLE;
+USE [master];
+ALTER DATABASE [appdb] SET READ_ONLY WITH ROLLBACK IMMEDIATE;
 ```
 
 In all cases, the effect applies to new connections; existing sessions
 may complete in-flight transactions before the read-only flag takes hold.
 The bounded overshoot between two lifecycle ticks (≤ 30 s) is the
 residual risk.
-
-The bounded overshoot between two lifecycle ticks is the residual risk
-(see Section 7).
 
 ---
 

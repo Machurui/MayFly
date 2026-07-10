@@ -18,6 +18,8 @@ public sealed class SqlServerEngineClient : IEngineClient
             InitialCatalog = db,
             UserID = user,
             Password = password,
+            // Encrypt=Optional and TrustServerCertificate are deliberate: traffic runs over the
+            // internal mayfly-users network where there is no PKI; encryption is opportunistic.
             TrustServerCertificate = true,
             ConnectTimeout = 5,
             CommandTimeout = 10,
@@ -31,5 +33,9 @@ public sealed class SqlServerEngineClient : IEngineClient
         => $"SELECT CAST(COALESCE(SUM(size),0) AS BIGINT)*8192 FROM sys.master_files WHERE database_id=DB_ID('{db}')";
 
     public string SoftEnforceReadOnlySql(string appUser, string db)
-        => $"USE [master]; ALTER DATABASE [{db}] SET READ_ONLY WITH ROLLBACK IMMEDIATE;";
+    {
+        // SQL Server flips the DATABASE read-only, so the app user is not referenced here.
+        _ = appUser;
+        return $"USE [master]; ALTER DATABASE [{db}] SET READ_ONLY WITH ROLLBACK IMMEDIATE;";
+    }
 }
