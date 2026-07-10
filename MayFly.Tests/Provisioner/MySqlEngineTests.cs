@@ -84,20 +84,23 @@ public class MySqlEngineTests
                 "appuser must be able to run DML on appdb");
 
             // --- 4. FILE privilege is absent: SELECT INTO OUTFILE must be rejected ---
+            // The SHOW GRANTS check above (lines 56-66) is the PRIMARY / definitive proof that
+            // appuser lacks FILE. The OUTFILE rejection below is SUPPLEMENTARY.
             // /tmp is on a writable tmpfs, so the rejection is purely about the missing FILE
-            // privilege — not a filesystem restriction. This is the definitive proof.
+            // privilege — not a filesystem restriction.
+            // Note: Under MySQL 8.4's default secure_file_priv=NULL, OUTFILE is rejected with
+            // error 1290 for EVERY user (even root), regardless of FILE privilege.
             await using var outfileCmd = new MySqlCommand(
                 "SELECT 1 INTO OUTFILE '/tmp/mayfly_probe'", conn);
             var ex = await Assert.ThrowsAsync<MySqlException>(
                 () => outfileCmd.ExecuteNonQueryAsync());
             // MySQL raises different error numbers depending on version and secure_file_priv:
             //   1045 – Access denied (no FILE privilege, checked first)
-            //   1 or 1 (HY000) – can't create/write, or
+            //   1142 – table-access denied
+            //   1227 – access denied for this operation
             //   1290 – secure_file_priv restriction
-            // Any MySqlException is acceptable; the important thing is that it is thrown.
-            // We additionally verify the grant list has no FILE (asserted above), so both
-            // vectors are covered.
-            ex.Should().NotBeNull("FILE-privileged OUTFILE must be denied to appuser");
+            ex.Number.Should().BeOneOf(new[] { 1045, 1142, 1227, 1290 },
+                "OUTFILE by appuser must be rejected (access-denied or secure_file_priv restriction)");
 
             // --- 5. Egress probe: outbound TCP from the DB container must fail ---
             // Mirrors EgressTests.cs exactly — nc -w2 times out with no default gateway on
@@ -142,6 +145,7 @@ public class MySqlEngineTests
 
     private static async Task WaitForMySqlAsync(string cs)
     {
+        Exception? lastEx = null;
         for (int i = 0; i < 90; i++)
         {
             try
@@ -150,8 +154,12 @@ public class MySqlEngineTests
                 await c.OpenAsync();
                 return;
             }
-            catch { await Task.Delay(1000); }
+            catch (Exception ex)
+            {
+                lastEx = ex;
+                await Task.Delay(1000);
+            }
         }
-        throw new TimeoutException("mysql did not become ready via sidecar within 90 s");
+        throw new TimeoutException($"MySQL not ready after 90 attempts: {lastEx?.Message}", lastEx);
     }
 }
