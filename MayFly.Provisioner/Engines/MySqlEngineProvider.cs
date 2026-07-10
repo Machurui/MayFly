@@ -3,10 +3,10 @@ using Docker.DotNet.Models;
 
 namespace MayFly.Provisioner.Engines;
 
-public sealed class MySqlEngineProvider : IEngineProvider
+public class MySqlEngineProvider : IEngineProvider
 {
-    public string EngineId => "mysql";
-    public string Image => "mysql:8.4";
+    public virtual string EngineId => "mysql";
+    public virtual string Image => "mysql:8.4";
     public int Port => 3306;
     public bool UsesInitVolume => true;
     public string DataDirectory => "/var/lib/mysql";
@@ -18,7 +18,7 @@ public sealed class MySqlEngineProvider : IEngineProvider
         return new EngineCredentials("root", adminPassword, "appuser", appPassword, "appdb");
     }
 
-    public IList<string> BuildEnv(EngineCredentials c) =>
+    public virtual IList<string> BuildEnv(EngineCredentials c) =>
         new List<string>
         {
             $"MYSQL_ROOT_PASSWORD={c.AdminPassword}",
@@ -42,7 +42,7 @@ public sealed class MySqlEngineProvider : IEngineProvider
     /// until the real mysqld server binds port 3306 — the temporary init-only server uses the
     /// unix socket with --skip-networking, so this is the correct "genuinely ready" signal.
     /// </summary>
-    public IList<string> ReadinessExec(EngineCredentials c) =>
+    public virtual IList<string> ReadinessExec(EngineCredentials c) =>
         new List<string> { "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", $"-p{c.AdminPassword}" };
 
     public void ApplyHardening(HostConfig hc)
