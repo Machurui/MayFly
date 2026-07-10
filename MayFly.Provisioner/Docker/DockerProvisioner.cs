@@ -195,6 +195,8 @@ public sealed class DockerProvisioner : IDockerProvisioner
             await WaitForEngineReadyAsync(containerId, provider.ReadinessExec(creds), ct);
 
             // For engines that skip the init-volume path, run PostReadyExec via docker-exec.
+            // We capture stdout+stderr so that a non-zero exit code produces a meaningful error
+            // message — a silent failure here would leave a broken instance with no app user.
             if (!provider.UsesInitVolume && setup.PostReadyExec is not null)
             {
                 var execCreate = await _docker.Exec.CreateContainerExecAsync(
@@ -210,7 +212,19 @@ public sealed class DockerProvisioner : IDockerProvisioner
                     execCreate.ID,
                     new ContainerExecStartParameters { Detach = false },
                     ct);
-                await execStream.CopyOutputToAsync(Stream.Null, Stream.Null, Stream.Null, ct);
+                using var stdoutBuf = new System.IO.MemoryStream();
+                using var stderrBuf = new System.IO.MemoryStream();
+                await execStream.CopyOutputToAsync(Stream.Null, stdoutBuf, stderrBuf, ct);
+
+                var execInspect = await _docker.Exec.InspectContainerExecAsync(execCreate.ID, ct);
+                if (execInspect.ExitCode != 0)
+                {
+                    var stdout = System.Text.Encoding.UTF8.GetString(stdoutBuf.ToArray());
+                    var stderr = System.Text.Encoding.UTF8.GetString(stderrBuf.ToArray());
+                    throw new InvalidOperationException(
+                        $"PostReadyExec exited with code {execInspect.ExitCode}. " +
+                        $"stdout: {stdout.Trim()} | stderr: {stderr.Trim()}");
+                }
             }
 
             return new CreateInstanceResult(containerId, volume!, name, port, creds.Db,
