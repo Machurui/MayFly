@@ -40,7 +40,7 @@ public class LifecycleServiceTests : IAsyncLifetime
             ctx.Instances.Add(new Instance
             {
                 CapabilityToken = "x", ContainerId = "dead-container-abc", VolumeName = "dead-vol",
-                PublicPort = 20099, State = InstanceState.Running,
+                PublicPort = 20099, State = InstanceState.Running, Engine = "postgres",
                 CreatedAt = DateTime.UtcNow.AddHours(-1), ExpiresAt = DateTime.UtcNow.AddHours(2)
             });
             await ctx.SaveChangesAsync();
@@ -130,7 +130,7 @@ public class LifecycleServiceTests : IAsyncLifetime
             ctx.Instances.Add(new Instance
             {
                 CapabilityToken = "x", ContainerId = "c", VolumeName = "v", PublicPort = 20003,
-                State = InstanceState.Running, CreatedAt = DateTime.UtcNow.AddHours(-4),
+                State = InstanceState.Running, Engine = "postgres", CreatedAt = DateTime.UtcNow.AddHours(-4),
                 ExpiresAt = DateTime.UtcNow.AddHours(-1)   // already expired
             });
             await ctx.SaveChangesAsync();
