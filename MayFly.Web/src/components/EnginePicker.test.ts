@@ -23,7 +23,7 @@ describe('EnginePicker', () => {
     expect(selected[0].text()).toContain('PostgreSQL')
   })
 
-  it('clicking mysql emits mssql-independent model value "mysql"', async () => {
+  it('clicking mysql emits "mysql"', async () => {
     const w = mountPicker('postgres')
     const cards = w.findAll('.engine-card')
     const mysqlCard = cards.find(c => c.text().includes('MySQL'))!

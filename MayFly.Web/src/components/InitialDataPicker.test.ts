@@ -70,23 +70,25 @@ describe('InitialDataPicker', () => {
     expect(w.emitted('update:modelValue')).toBeFalsy()
   })
 
-  it('blank is always selectable regardless of engine', async () => {
-    // Start with 'northwind' selected on postgres, then switch engine to mssql
-    // (which resets to blank via the watcher), then verify blank card is clickable
+  it('resets model to blank when engine changes from postgres to mssql and northwind was selected', async () => {
     const w = mount(InitialDataPicker, {
       props: { modelValue: 'northwind', engine: 'postgres' },
     })
     // Switch to mssql engine — watcher should reset to blank
     await w.setProps({ engine: 'mssql' })
-    // Now mount fresh with mssql + blank, confirm blank card is not disabled
-    const w2 = mount(InitialDataPicker, {
+    expect(w.emitted('update:modelValue')?.[0]).toEqual(['blank'])
+  })
+
+  it('blank is always selectable when engine is mssql and model is northwind', async () => {
+    // Mount with mssql + northwind, confirm blank card is not disabled
+    const w = mount(InitialDataPicker, {
       props: { modelValue: 'northwind', engine: 'mssql' },
     })
-    const opts = w2.findAll('.opt')
+    const opts = w.findAll('.opt')
     const blank = opts.find(o => o.text().includes('Blank'))!
     expect(blank.attributes('style')).not.toContain('pointer-events: none')
     // Clicking blank (when northwind is currently selected) should emit 'blank'
     await blank.trigger('click')
-    expect(w2.emitted('update:modelValue')?.[0]).toEqual(['blank'])
+    expect(w.emitted('update:modelValue')?.[0]).toEqual(['blank'])
   })
 })

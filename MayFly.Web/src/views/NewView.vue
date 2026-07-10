@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { createInstance } from '../api/instances'
+import { engineLabel } from '../lib/engineLabels'
 import EnginePicker from '../components/EnginePicker.vue'
 import TtlPicker from '../components/TtlPicker.vue'
 import StoragePicker from '../components/StoragePicker.vue'
@@ -31,7 +32,7 @@ const summary = computed(() => {
   const em = engineMeta[engine.value] ?? { driver: engine.value, version: '?' }
   const stLbl = storageLabelMap[storageMb.value] ?? `${storageMb.value} MB`
   const nm = name.value.trim() || 'swift-otter'
-  return `> ${em.driver} ${em.version}  storage ${stLbl}
+  return `> ${engineLabel(engine.value)} ${em.version}  storage ${stLbl}
 > ttl    ${ttlHours.value}h         — destroyed in ${ttlHours.value}h
 > seed   ${initialData.value}
 > name   ${nm}`
