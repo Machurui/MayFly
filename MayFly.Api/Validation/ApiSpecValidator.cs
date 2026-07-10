@@ -4,7 +4,7 @@ namespace MayFly.Api.Validation;
 
 public static class ApiSpecValidator
 {
-    private static readonly HashSet<string> Engines = new() { "postgres" };
+    private static readonly HashSet<string> Engines = new() { "postgres", "mysql", "mariadb", "mssql" };
     private static readonly HashSet<int> Ttls = new() { 3, 6, 12 };
     private static readonly HashSet<int> Storage = new() { 256, 512, 1024, 2048 };
     private static readonly HashSet<string> Init = new() { "blank", "northwind" };
@@ -15,6 +15,8 @@ public static class ApiSpecValidator
         if (!Ttls.Contains(d.TtlHours)) return (false, "ttl not allowed");
         if (!Storage.Contains(d.StorageMb)) return (false, "storage not allowed");
         if (!Init.Contains(d.InitialData)) return (false, "initialData not allowed");
+        if (d.InitialData == "northwind" && d.Engine != "postgres")
+            return (false, "initialData not allowed for this engine");
         return (true, null);
     }
 }

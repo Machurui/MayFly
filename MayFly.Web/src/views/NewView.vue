@@ -18,11 +18,11 @@ const error       = ref('')
 const busy        = ref(false)
 
 const engineMeta: Record<string, { driver: string; version: string }> = {
-  postgres:  { driver: 'postgresql', version: '17.5' },
-  mysql:     { driver: 'mysql',      version: '8.4'  },
-  mariadb:   { driver: 'mariadb',    version: '11.4' },
-  mongodb:   { driver: 'mongodb',    version: '7.0'  },
-  sqlserver: { driver: 'sqlserver',  version: '22'   },
+  postgres: { driver: 'postgresql', version: '17.5' },
+  mysql:    { driver: 'mysql',      version: '8.4'  },
+  mariadb:  { driver: 'mariadb',    version: '11.4' },
+  mongodb:  { driver: 'mongodb',    version: '7.0'  },
+  mssql:    { driver: 'mssql',      version: '22'   },
 }
 
 const storageLabelMap: Record<number, string> = { 256: '256 MB', 512: '512 MB', 1024: '1 GB', 2048: '2 GB' }
@@ -148,7 +148,7 @@ async function create() {
           </div>
           <div class="hr flex-1" style="margin-left: 12px;"></div>
         </div>
-        <InitialDataPicker v-model="initialData" />
+        <InitialDataPicker v-model="initialData" :engine="engine" />
       </section>
 
       <!-- Section 05 — Name -->

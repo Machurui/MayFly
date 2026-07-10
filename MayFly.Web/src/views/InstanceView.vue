@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useInstance, destroyInstance } from '../api/instances'
 import { formatBytes } from '../lib/format'
+import { engineLabel } from '../lib/engineLabels'
 import ConnectionSnippets from '../components/ConnectionSnippets.vue'
 
 const props = defineProps<{ token: string }>()
@@ -141,7 +142,7 @@ async function destroy() {
               </span>
             </div>
             <div class="dim" style="font-size: 12px;">
-              PostgreSQL · storage {{ inst.storageQuotaMb }} MB · seed {{ inst.initialData }}
+              {{ engineLabel(inst.engine) }} · storage {{ inst.storageQuotaMb }} MB · seed {{ inst.initialData }}
             </div>
           </div>
         </div>
