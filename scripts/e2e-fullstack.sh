@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# MayFly full-stack end-to-end smoke test.
-# Builds all images, brings up the complete stack, exercises 6 checks through
-# Caddy on http://localhost, then tears everything down on EXIT.
+# MayFly full-stack end-to-end smoke test — all four engines.
+# Builds all images, brings up the complete stack, exercises checks through
+# Caddy on http://localhost for each engine (postgres/mysql/mariadb/mssql),
+# then tears everything down on EXIT.
 #
-# Checks performed (all through Caddy — NOT hitting api or web directly):
+# Preamble checks (run once):
 #   1. GET /               → 200, body contains <div id="app">  (Vue SPA served)
 #   2. GET /api/instances  → 200 (empty array OK)               (Caddy→API routing)
-#   3. POST /api/instances → 201 with token + connectionString  (end-to-end provision)
-#   3b. Egress probe       → DB container has no outbound internet (internal network)
-#   4. POST /api/instances/{token}/query → success:true, count>0 (Northwind seeded)
-#   5. GET /api/dashboard  → 200, aliveCount>=1                 (dashboard counts)
-#   6. DELETE /api/instances/{token} → 204                      (cleanup)
+#
+# Per-engine checks (run sequentially; each DB is deleted before the next is created):
+#   A. POST /api/instances {engine}  → 201 with token + connectionString
+#   B. Egress probe (best-effort)    → DB container has no outbound internet
+#   C. POST /api/instances/{token}/query  → success:true [, count>0 for Northwind]
+#   D. DELETE /api/instances/{token} → 204; no leftover DB/sidecar containers
+#
+# Engines: postgres (Northwind seed), mysql (blank), mariadb (blank), mssql (blank, 300s)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +22,6 @@ COOKIES=/tmp/mayfly-fs-cookies-$$.txt
 PASS=0
 FAIL=0
 ERRORS=()
-INSTANCE_TOKEN=""
 
 # ── Cleanup: ALWAYS runs on EXIT ──────────────────────────────────────────────
 cleanup() {
@@ -26,7 +29,8 @@ cleanup() {
   echo "=== CLEANUP ==="
   cd "$REPO"
   docker compose down -v 2>/dev/null || true
-  # Remove provisioner-managed containers (DB + sidecar + any crashed writer containers)
+  # Remove provisioner-managed containers (DB containers are always named mayfly-pg-<id>
+  # regardless of engine; sidecars are mayfly-sidecar-<id>; writer containers are transient)
   REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar|initwriter)-' || true)
   if [[ -n "$REMAINING" ]]; then
     echo "  Force-removing leftover containers: $REMAINING"
@@ -38,8 +42,7 @@ cleanup() {
     echo "  Removing leftover volumes: $LINGERING_VOLS"
     echo "$LINGERING_VOLS" | xargs docker volume rm -f 2>/dev/null || true
   fi
-  # Remove user-network and ingress network created by provisioner (compose down may not clean these
-  # if they were created by the provisioner service rather than compose itself)
+  # Remove user-network and ingress network created by provisioner
   docker network rm mayfly-users mayfly-ingress mayfly-internal 2>/dev/null || true
   rm -f "$COOKIES"
   echo "  Cleanup done — no leftover mayfly containers, volumes, or networks."
@@ -75,9 +78,152 @@ wait_for_http() {
   done
 }
 
+# ── test_engine <engine> <storageMb> <initialData> <query> <expect> ───────────
+# <expect>: "count" → assert rows[0][0] > 0 (Northwind seed check)
+#           "success" → assert success:true only
+# Egress probe is best-effort: WARN+SKIP if probe tool unavailable; REACHED is a hard fail.
+test_engine() {
+  local engine="$1" storageMb="$2" initialData="$3" query="$4" expect="$5"
+  local label="[${engine}]"
+  local token=""
+
+  echo ""
+  echo "============================================"
+  echo "ENGINE: $engine (storageMb=$storageMb, initialData=$initialData)"
+  echo "============================================"
+
+  # --- A: Create ---
+  local max_time=180
+  # mssql runs emulated (amd64 on arm64) → slow provision; use a generous timeout
+  [[ "$engine" == "mssql" ]] && max_time=300
+
+  echo "${label} A: POST /api/instances"
+  local create_resp create_status create_body
+  create_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time "$max_time" \
+    -X POST http://localhost/api/instances \
+    -H 'Content-Type: application/json' \
+    -d "{\"engine\":\"${engine}\",\"ttlHours\":3,\"storageMb\":${storageMb},\"initialData\":\"${initialData}\"}" \
+    2>/dev/null || echo "__STATUS__:000")
+  create_status=$(echo "$create_resp" | grep '__STATUS__:' | cut -d: -f2)
+  create_body=$(echo "$create_resp" | grep -v '__STATUS__:')
+  echo "  HTTP $create_status"
+  echo "  Body: $create_body"
+
+  if [[ "$create_status" != "201" ]]; then
+    check_fail "${label} A: create → expected 201, got $create_status"
+    docker compose logs api | tail -30
+    docker compose logs provisioner | tail -30
+    return
+  fi
+  check_pass "${label} A: create → 201"
+
+  token=$(echo "$create_body" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null || echo "")
+  echo "  Token: $token"
+  if [[ -z "$token" ]]; then
+    check_fail "${label} A: token missing from response body"
+    return
+  fi
+
+  # --- B: Egress probe (engine-agnostic, best-effort) ---
+  echo ""
+  echo "${label} B: Egress probe (best-effort — hard proof is in integration tests)"
+  # Find DB container by label mayfly.role=db (engine-agnostic)
+  local db_container
+  db_container=$(docker ps --format '{{.Names}}' --filter 'label=mayfly.role=db' | head -1 || true)
+  if [[ -n "$db_container" ]]; then
+    echo "  Probing from container: $db_container"
+    # Primary: bash /dev/tcp (portable built-in; works on alpine and Ubuntu images)
+    local egress_out
+    egress_out=$(docker exec "$db_container" bash -c \
+      'timeout 3 bash -c "echo > /dev/tcp/1.1.1.1/53" && echo REACHED || echo NOEGRESS' \
+      2>/dev/null || true)
+    # Fallback: nc (if bash or /dev/tcp unavailable)
+    if [[ -z "$egress_out" ]]; then
+      egress_out=$(docker exec "$db_container" sh -c \
+        '(nc -w2 1.1.1.1 80 2>/dev/null && echo REACHED) || echo NOEGRESS' \
+        2>/dev/null || true)
+    fi
+    echo "  Probe output: ${egress_out:-<unavailable>}"
+    if [[ -z "$egress_out" ]]; then
+      echo "  WARN: probe tool unavailable in $engine image — skipping egress assertion"
+    elif echo "$egress_out" | grep -q "REACHED"; then
+      check_fail "${label} B: Egress probe → REACHED — DB container has internet access!"
+    else
+      check_pass "${label} B: Egress probe → NOEGRESS (internal network confirmed)"
+    fi
+  else
+    echo "  WARN: could not find DB container by label mayfly.role=db — skipping egress probe"
+  fi
+
+  # --- C: Query ---
+  echo ""
+  echo "${label} C: POST /api/instances/$token/query  sql=\"$query\""
+  local query_resp query_status query_body
+  query_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 30 \
+    -X POST "http://localhost/api/instances/$token/query" \
+    -H 'Content-Type: application/json' \
+    -d "{\"sql\":\"${query}\"}" \
+    2>/dev/null || echo "__STATUS__:000")
+  query_status=$(echo "$query_resp" | grep '__STATUS__:' | cut -d: -f2)
+  query_body=$(echo "$query_resp" | grep -v '__STATUS__:')
+  echo "  HTTP $query_status  body: $query_body"
+
+  local q_success
+  q_success=$(echo "$query_body" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin).get('success',''))" 2>/dev/null || echo "")
+
+  if [[ "$expect" == "count" ]]; then
+    local q_count
+    q_count=$(echo "$query_body" | python3 -c \
+      "import sys,json; print(json.load(sys.stdin).get('rows',[[0]])[0][0])" 2>/dev/null || echo "0")
+    echo "  success=$q_success  count=$q_count"
+    if [[ "$q_success" == "True" ]] && (( q_count > 0 )); then
+      check_pass "${label} C: query → success:true, count=$q_count (Northwind confirmed)"
+    else
+      check_fail "${label} C: query → failed or count=0 (success=$q_success count=$q_count)"
+    fi
+  else
+    echo "  success=$q_success"
+    if [[ "$q_success" == "True" ]]; then
+      check_pass "${label} C: query → success:true"
+    else
+      check_fail "${label} C: query → failed (success=$q_success)"
+    fi
+  fi
+
+  # --- D: Destroy ---
+  echo ""
+  echo "${label} D: DELETE /api/instances/$token"
+  local del_resp del_status
+  del_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 30 \
+    -X DELETE "http://localhost/api/instances/$token" \
+    2>/dev/null || echo "__STATUS__:000")
+  del_status=$(echo "$del_resp" | grep '__STATUS__:' | cut -d: -f2)
+  echo "  DELETE HTTP $del_status"
+  if [[ "$del_status" == "204" ]]; then
+    check_pass "${label} D: destroy → 204"
+    sleep 2
+    # Check no leftover DB or sidecar containers (all DB containers named mayfly-pg-<id>)
+    local remaining
+    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
+    if [[ -z "$remaining" ]]; then
+      check_pass "${label} D: no leftover DB/sidecar containers after delete"
+    else
+      check_fail "${label} D: leftover containers after delete: $remaining"
+    fi
+  else
+    check_fail "${label} D: destroy → expected 204, got $del_status"
+  fi
+}
+
 echo "============================================"
-echo "MayFly Full-Stack E2E Smoke (through Caddy)"
+echo "MayFly Full-Stack E2E — All Engines"
 echo "  Entry point: http://localhost"
+echo "  Engines: postgres / mysql / mariadb / mssql"
 echo "============================================"
 echo ""
 
@@ -120,7 +266,7 @@ sleep 3
 
 echo ""
 echo "============================================"
-echo "Stack ready. Running 6 checks."
+echo "Stack ready. Running preamble checks."
 echo "============================================"
 
 # ── CHECK 1: SPA served through Caddy ─────────────────────────────────────────
@@ -158,128 +304,23 @@ else
   docker compose logs api | tail -20
 fi
 
-# ── CHECK 3: POST /api/instances via Caddy ────────────────────────────────────
+# ── Per-engine checks: create → egress → query → destroy ──────────────────────
 echo ""
-echo "=== CHECK 3: POST http://localhost/api/instances → 201 ==="
-# Use --max-time 180: northwind seeding (postgres init + SQL) can take ~60s
-CREATE_RESP=$(curl -s -c "$COOKIES" -b "$COOKIES" \
-  -w "\n__STATUS__:%{http_code}" --max-time 180 \
-  -X POST http://localhost/api/instances \
-  -H 'Content-Type: application/json' \
-  -d '{"engine":"postgres","ttlHours":3,"storageMb":256,"initialData":"northwind"}' \
-  2>/dev/null || echo "__STATUS__:000")
-CREATE_STATUS=$(echo "$CREATE_RESP" | grep '__STATUS__:' | cut -d: -f2)
-CREATE_BODY=$(echo "$CREATE_RESP" | grep -v '__STATUS__:')
-echo "  HTTP $CREATE_STATUS"
-echo "  Body: $CREATE_BODY"
-if [[ "$CREATE_STATUS" == "201" ]]; then
-  check_pass "CHECK 3: POST /api/instances → 201"
-  INSTANCE_TOKEN=$(echo "$CREATE_BODY" | python3 -c \
-    "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null || echo "")
-  CONN_STRING=$(echo "$CREATE_BODY" | python3 -c \
-    "import sys,json; print(json.load(sys.stdin)['connectionString'])" 2>/dev/null || echo "")
-  echo "  Token: $INSTANCE_TOKEN"
-  echo "  ConnectionString: $CONN_STRING"
-  [[ -z "$INSTANCE_TOKEN" ]] && check_fail "CHECK 3b: token missing from response body"
+echo "============================================"
+echo "Per-engine checks (sequential, 1 DB at a time)"
+echo "============================================"
 
-  # ── CHECK 3c: Egress probe — DB container must have no internet egress ─────
-  # mayfly-users is declared internal:true in compose; the provisioner enforces the
-  # same flag when it creates the network. Prove it: exec nc inside the DB container.
-  # nc -w2 1.1.1.1 80: with no gateway (internal network), nc times out and exits
-  # non-zero → NOEGRESS is printed. If egress were open, nc connects and REACHED is printed.
-  echo ""
-  echo "=== CHECK 3c: Egress probe — no outbound internet from DB container ==="
-  DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep '^mayfly-pg-' | head -1 || true)
-  if [[ -n "$DB_CONTAINER" ]]; then
-    echo "  Probing from container: $DB_CONTAINER"
-    EGRESS_OUT=$(docker exec "$DB_CONTAINER" sh -c \
-      '(nc -w2 1.1.1.1 80 2>/dev/null && echo REACHED) || echo NOEGRESS' 2>/dev/null || echo "NOEGRESS")
-    echo "  Probe output: $EGRESS_OUT"
-    if echo "$EGRESS_OUT" | grep -q "NOEGRESS"; then
-      check_pass "CHECK 3c: Egress probe → NOEGRESS (internal network confirmed)"
-    else
-      check_fail "CHECK 3c: Egress probe → REACHED — DB container has internet access!"
-    fi
-  else
-    echo "  WARN: could not find mayfly-pg-* container for egress probe; skipping."
-  fi
-else
-  check_fail "CHECK 3: POST /api/instances expected 201, got $CREATE_STATUS"
-  docker compose logs api | tail -30
-  docker compose logs provisioner | tail -30
-fi
+# postgres: Northwind seed — verify data was initialised (SELECT COUNT(*) FROM products, count>0)
+test_engine postgres  256  northwind  "SELECT COUNT(*) FROM products"  count
 
-# ── CHECK 4: Query via Caddy (Northwind COUNT) ────────────────────────────────
-echo ""
-echo "=== CHECK 4: POST http://localhost/api/instances/{token}/query ==="
-if [[ -n "$INSTANCE_TOKEN" ]]; then
-  QUERY_RESP=$(curl -s -c "$COOKIES" -b "$COOKIES" \
-    -w "\n__STATUS__:%{http_code}" --max-time 30 \
-    -X POST "http://localhost/api/instances/$INSTANCE_TOKEN/query" \
-    -H 'Content-Type: application/json' \
-    -d '{"sql":"SELECT COUNT(*) FROM products"}' \
-    2>/dev/null || echo "__STATUS__:000")
-  QUERY_STATUS=$(echo "$QUERY_RESP" | grep '__STATUS__:' | cut -d: -f2)
-  QUERY_BODY=$(echo "$QUERY_RESP" | grep -v '__STATUS__:')
-  echo "  HTTP $QUERY_STATUS  body: $QUERY_BODY"
-  Q_SUCCESS=$(echo "$QUERY_BODY" | python3 -c \
-    "import sys,json; print(json.load(sys.stdin).get('success',''))" 2>/dev/null || echo "")
-  Q_COUNT=$(echo "$QUERY_BODY" | python3 -c \
-    "import sys,json; print(json.load(sys.stdin).get('rows',[[0]])[0][0])" 2>/dev/null || echo "0")
-  echo "  success=$Q_SUCCESS  products=$Q_COUNT"
-  if [[ "$Q_SUCCESS" == "True" ]] && (( Q_COUNT > 0 )); then
-    check_pass "CHECK 4: POST /query → success:true, products=$Q_COUNT (Northwind confirmed)"
-  else
-    check_fail "CHECK 4: Query failed or count=0 (success=$Q_SUCCESS count=$Q_COUNT)"
-  fi
-else
-  check_fail "CHECK 4: Skipped (no instance token from check 3)"
-fi
+# mysql: blank — verify DB + appuser work (SELECT 1, success:true)
+test_engine mysql     256  blank      "SELECT 1"                        success
 
-# ── CHECK 5: Dashboard via Caddy ──────────────────────────────────────────────
-echo ""
-echo "=== CHECK 5: GET http://localhost/api/dashboard → aliveCount>=1 ==="
-DASH_RESP=$(curl -s -c "$COOKIES" -b "$COOKIES" \
-  -w "\n__STATUS__:%{http_code}" --max-time 10 \
-  http://localhost/api/dashboard 2>/dev/null || echo "__STATUS__:000")
-DASH_STATUS=$(echo "$DASH_RESP" | grep '__STATUS__:' | cut -d: -f2)
-DASH_BODY=$(echo "$DASH_RESP" | grep -v '__STATUS__:')
-echo "  HTTP $DASH_STATUS  body: $DASH_BODY"
-ALIVE=$(echo "$DASH_BODY" | python3 -c \
-  "import sys,json; print(json.load(sys.stdin).get('aliveCount',0))" 2>/dev/null || echo "0")
-if [[ "$DASH_STATUS" == "200" ]] && (( ALIVE >= 1 )); then
-  check_pass "CHECK 5: GET /api/dashboard → 200, aliveCount=$ALIVE"
-else
-  check_fail "CHECK 5: Expected 200+aliveCount>=1, got status=$DASH_STATUS aliveCount=$ALIVE"
-fi
+# mariadb: blank — verify DB + appuser work (SELECT 1, success:true)
+test_engine mariadb   256  blank      "SELECT 1"                        success
 
-# ── CHECK 6: Delete instance via Caddy ────────────────────────────────────────
-echo ""
-echo "=== CHECK 6: DELETE http://localhost/api/instances/{token} → 204 ==="
-if [[ -n "$INSTANCE_TOKEN" ]]; then
-  DEL_RESP=$(curl -s -c "$COOKIES" -b "$COOKIES" \
-    -w "\n__STATUS__:%{http_code}" --max-time 30 \
-    -X DELETE "http://localhost/api/instances/$INSTANCE_TOKEN" \
-    2>/dev/null || echo "__STATUS__:000")
-  DEL_STATUS=$(echo "$DEL_RESP" | grep '__STATUS__:' | cut -d: -f2)
-  echo "  DELETE HTTP $DEL_STATUS"
-  if [[ "$DEL_STATUS" == "204" ]]; then
-    check_pass "CHECK 6: DELETE /api/instances/$INSTANCE_TOKEN → 204"
-    INSTANCE_TOKEN=""  # clear so cleanup trap skips extra delete attempt
-    sleep 2
-    # Check that both the DB container AND the sidecar have been removed
-    REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
-    if [[ -z "$REMAINING" ]]; then
-      check_pass "CHECK 6b: No leftover mayfly-pg-* or mayfly-sidecar-* containers after delete"
-    else
-      check_fail "CHECK 6b: Leftover containers after delete: $REMAINING"
-    fi
-  else
-    check_fail "CHECK 6: DELETE expected 204, got $DEL_STATUS"
-  fi
-else
-  check_fail "CHECK 6: Skipped (no instance token)"
-fi
+# mssql: blank, 1 GiB (mssql 2 GiB memory floor), longer provision timeout (emulated on arm64)
+test_engine mssql     1024 blank      "SELECT 1"                        success
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

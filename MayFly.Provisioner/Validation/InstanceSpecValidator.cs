@@ -4,7 +4,7 @@ namespace MayFly.Provisioner.Validation;
 
 public static class InstanceSpecValidator
 {
-    private static readonly HashSet<string> Engines = new() { "postgres" };
+    private static readonly HashSet<string> Engines = new() { "postgres", "mysql", "mariadb", "mssql" };
     private static readonly HashSet<int> Ttls = new() { 3, 6, 12 };
     private static readonly HashSet<int> Storage = new() { 256, 512, 1024, 2048 };
     private static readonly HashSet<string> InitialData = new() { "blank", "northwind" };

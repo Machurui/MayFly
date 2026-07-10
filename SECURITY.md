@@ -1,9 +1,9 @@
 # MayFly Security
 
 MayFly is a public ephemeral-database service: any visitor receives a
-short-lived, isolated PostgreSQL instance reachable over the public internet.
-This document describes the security controls deployed, host prerequisites,
-and residual risks.
+short-lived, isolated database instance (PostgreSQL, MySQL, MariaDB, or SQL
+Server) reachable over the public internet. This document describes the
+security controls deployed, host prerequisites, and residual risks.
 
 ---
 
@@ -38,20 +38,30 @@ shared `mayfly-internal` compose network) can reach it.
 
 ### 2.1 User role: `appuser`
 
-Each instance is initialised with two PostgreSQL roles via container
-init-scripts (executed by Postgres before it accepts connections — no
-external SQL connection is needed):
+Each instance is initialised with two database roles. The admin credential
+(`mayflyadmin` / `sa` / `root`) is **never returned to users**; only the
+unprivileged `appuser` credential appears in `connectionString`.
 
-- `mayflyadmin` — PostgreSQL superuser. Created by the `POSTGRES_USER`
-  environment variable. **Never returned to users.**
-- `appuser` — Created by `00-roles.sql` with `NOSUPERUSER NOCREATEDB
-  NOCREATEROLE`. This is the credential returned in `connectionString`.
+**PostgreSQL** — roles are created by `00-roles.sql` placed in
+`/docker-entrypoint-initdb.d` (executed before the server opens port 5432):
+- `mayflyadmin` — `POSTGRES_USER` superuser. Never exposed.
+- `appuser` — `NOSUPERUSER NOCREATEDB NOCREATEROLE`.
 
 Because `appuser` is not a superuser:
-- `COPY ... FROM/TO PROGRAM` is blocked (`must be superuser to COPY to
-  or from an external program`).
+- `COPY ... FROM/TO PROGRAM` is blocked.
 - Server-side file reads (`COPY ... FROM '/etc/passwd'`) are blocked.
 - `pg_read_file()` and similar functions are unavailable.
+
+**MySQL / MariaDB** — roles are created by `00-roles.sql` in
+`/docker-entrypoint-initdb.d`. `appuser` receives `SELECT, INSERT, UPDATE,
+DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES` on the instance database
+only; no `FILE`, `SUPER`, or `PROCESS` privilege.
+
+**SQL Server** — there is no init-script path; setup runs after readiness
+via `docker exec sqlcmd` (see §4.4). `appuser` is a SQL Server Login mapped
+to a database user with `db_datareader`, `db_datawriter`, and `db_ddladmin`
+roles on `appdb`. It has no server-level (`sysadmin`, `securityadmin`)
+privileges.
 
 The `appuser` password is generated with 128 bits of randomness per
 instance and is stored encrypted in the metadata database
@@ -93,7 +103,8 @@ that is dual-homed:
   host port)
 
 The DB container itself has **no published port**. The sidecar forwards
-`<host-port> → <db-container>:5432`. This means:
+`<host-port> → <db-container>:<engine-port>` (5432 for postgres, 3306 for
+mysql/mariadb, 1433 for mssql). This means:
 
 - DB containers are never directly reachable from the host.
 - Blocking the sidecar terminates external DB access without touching
@@ -111,16 +122,18 @@ against user DBs). It is not a member of `mayfly-ingress`.
 
 ## 4. Container hardening
 
-Every user DB container is started with:
+### 4.1 Default hardening (postgres, mysql, mariadb)
+
+Every PostgreSQL, MySQL, and MariaDB user DB container is started with:
 
 | Control | Value |
 |---|---|
 | `CapDrop` | `ALL` |
-| `CapAdd` | `CHOWN`, `SETUID`, `SETGID`, `FOWNER`, `DAC_OVERRIDE` (minimum for Postgres startup) |
+| `CapAdd` | `CHOWN`, `SETUID`, `SETGID`, `FOWNER`, `DAC_OVERRIDE` |
 | `SecurityOpt` | `no-new-privileges` |
 | `ReadonlyRootfs` | `true` |
-| `Tmpfs` mounts | `/tmp` (64 MiB), `/var/run/postgresql` (16 MiB), `/run` (16 MiB) |
-| `Memory` limit | 256 MiB |
+| `Tmpfs` mounts | `/tmp` (64 MiB); postgres/mysql/mariadb also add `/var/run/<engine>` (16 MiB) and `/run` (16 MiB) |
+| `Memory` limit | 256 MiB (postgres); 512 MiB (mysql, mariadb — InnoDB buffer pool floor) |
 | `NanoCPUs` | 500,000,000 (0.5 CPU) |
 | `PidsLimit` | 200 |
 | `RestartPolicy` | `no` (containers do not restart automatically) |
@@ -128,6 +141,31 @@ Every user DB container is started with:
 The read-only rootfs means that even if an attacker achieves code
 execution inside the container, they cannot modify the filesystem outside
 the declared tmpfs mounts.
+
+### 4.2 SQL Server deviations
+
+SQL Server (`mssql`) requires several relaxations from the default hardening.
+All controls not listed here are retained at the same level as §4.1.
+
+| Control | Postgres/MySQL/MariaDB | SQL Server | Reason |
+|---|---|---|---|
+| `ReadonlyRootfs` | `true` | **`false`** | `sqlservr` writes to `/var/opt/mssql` (data, logs, tempdb, secrets) at runtime; the path layout is not amenable to tmpfs overlays |
+| `Memory` | 256–512 MiB | **2 GiB** | SQL Server enforces a minimum 2 GiB working set; instances below this floor crash on startup |
+| `NanoCPUs` | 500,000,000 | **1,000,000,000** (1 CPU) | sqlservr minimum viable throughput |
+| `PidsLimit` | 200 | **500** | SQL Server spawns more system threads |
+| `CapAdd` | `CHOWN SETUID SETGID FOWNER DAC_OVERRIDE` | same **+ `NET_BIND_SERVICE`** | The `sqlservr` binary carries a file capability `cap_net_bind_service=ep`. With `CapDrop=ALL` and `no-new-privileges`, the kernel verifies that any file capability on the exec target is satisfiable within the bounding set. `NET_BIND_SERVICE` absent from the bounding set causes exec to fail with `EPERM`. |
+
+### 4.3 SQL Server setup path (docker-exec, not init-script)
+
+SQL Server does not support `/docker-entrypoint-initdb.d`. Instead, the
+`DockerProvisioner` waits for SQL Server to accept connections (via the
+readiness poll), then runs a single `docker exec sqlcmd` command that creates
+the database, server-level login, and database-level user in one batch.
+
+The Provisioner itself is **not** on the `mayfly-users` network; it reaches
+the container via `docker exec` (a control-plane call through the Docker
+socket), not via a direct TCP connection. This preserves the property that
+only `MayFly.Api` can reach user DB containers over the network.
 
 ---
 
@@ -149,18 +187,33 @@ configured on the host before starting MayFly (see Section 8).
 ### 5.2 Portable soft-enforce
 
 Independently of XFS, the `QuotaEnforcer` runs during each lifecycle
-tick and queries `pg_database_size(current_database())` via the `appuser`
-connection. When the returned size meets or exceeds `StorageQuotaMb`,
-the enforcer connects as `mayflyadmin` and runs:
+tick and queries the engine-appropriate size function via the `appuser`
+connection (`pg_database_size` for postgres; `information_schema` for
+MySQL/MariaDB; `sys.dm_db_file_space_usage` for SQL Server). When the
+returned size meets or exceeds `StorageQuotaMb`, the enforcer connects
+as the admin credential and flips `appuser` to read-only.
 
+For **PostgreSQL**:
 ```sql
 ALTER ROLE appuser SET default_transaction_read_only = on;
 ```
 
-All subsequent `appuser` sessions see `default_transaction_read_only =
-on`, preventing further writes. Because `ALTER ROLE ... SET` applies at
-role level (not per-session), existing connections are not immediately
-affected; new connections are read-only.
+For **MySQL / MariaDB**:
+```sql
+REVOKE INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES
+  ON `appdb`.* FROM 'appuser'@'%';
+FLUSH PRIVILEGES;
+```
+
+For **SQL Server**, quota enforcement is executed via `docker exec sqlcmd`:
+```sql
+ALTER LOGIN [appuser] DISABLE;
+```
+
+In all cases, the effect applies to new connections; existing sessions
+may complete in-flight transactions before the read-only flag takes hold.
+The bounded overshoot between two lifecycle ticks (≤ 30 s) is the
+residual risk.
 
 The bounded overshoot between two lifecycle ticks is the residual risk
 (see Section 7).

@@ -34,7 +34,7 @@ public class ProvisionerEndpointsTests : IClassFixture<WebApplicationFactory<May
     public async Task Create_rejects_disallowed_engine_with_400()
     {
         var resp = await _client.PostAsJsonAsync("/instances",
-            new CreateInstanceRequest("mysql", 3, 256, "blank"));
+            new CreateInstanceRequest("oracle", 3, 256, "blank"));
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
