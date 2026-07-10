@@ -116,7 +116,7 @@ public sealed class DockerProvisioner : IDockerProvisioner
             // Engine-specific hardening (rootfs/tmpfs/caps/limits) is layered on by the provider.
             var mounts = new List<Mount>
             {
-                new() { Type = "volume", Source = volume, Target = "/var/lib/postgresql/data" }
+                new() { Type = "volume", Source = volume, Target = provider.DataDirectory }
             };
             if (provider.UsesInitVolume)
             {

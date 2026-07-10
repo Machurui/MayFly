@@ -10,6 +10,7 @@ public interface IEngineProvider
     string Image { get; }
     int Port { get; }               // 5432 | 3306 | 3306 | 1433
     bool UsesInitVolume { get; }    // true = initdb.d via init-volume/writer; false = post-ready docker-exec (mssql)
+    string DataDirectory { get; }   // container path where the engine stores its data volume
     EngineCredentials GenerateCredentials();               // engine-compliant passwords
     IList<string> BuildEnv(EngineCredentials c);           // POSTGRES_*/MYSQL_*/MARIADB_*/MSSQL_*
     EngineSetup BuildSetup(EngineCredentials c, string initialData);

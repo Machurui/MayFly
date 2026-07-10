@@ -11,6 +11,7 @@ public sealed class PostgresEngineProvider : IEngineProvider
     public string Image => "postgres:16-alpine";
     public int Port => 5432;
     public bool UsesInitVolume => true;
+    public string DataDirectory => "/var/lib/postgresql/data";
 
     public EngineCredentials GenerateCredentials()
     {

@@ -24,6 +24,7 @@ public class Program
         });
 
         builder.Services.AddSingleton<IEngineProvider, PostgresEngineProvider>();
+        builder.Services.AddSingleton<IEngineProvider, MySqlEngineProvider>();
         builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
 
         var app = builder.Build();
