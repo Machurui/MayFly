@@ -27,6 +27,7 @@ builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo("/keys"))
     .SetApplicationName("MayFly");
 builder.Services.AddSingleton<IEngineClient, PostgresEngineClient>();
+builder.Services.AddSingleton<IEngineClient, MySqlEngineClient>();
 builder.Services.AddSingleton<EngineClientRegistry>();
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
