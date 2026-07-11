@@ -4,6 +4,7 @@ using FluentAssertions;
 using MayFly.Api.Domain;
 using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
+using MayFly.Api.Mongo;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Provisioner.Contracts;
@@ -13,6 +14,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Xunit;
 
 [Trait("Category", "Docker")]
@@ -65,7 +67,7 @@ public class SqlServerEngineClientTests
 
             var registry = new EngineClientRegistry(new IEngineClient[] { new SqlServerEngineClient() });
             var executor  = new QueryExecutor(secrets, cfg, registry);
-            var enforcer  = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance, registry);
+            var enforcer  = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance, registry, Mock.Of<IMongoOps>());
 
             // Wait for SQL Server to accept connections (emulated mssql can take 60-120s)
             await WaitReadyAsync(executor, inst);

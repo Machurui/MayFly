@@ -3,6 +3,7 @@ using FluentAssertions;
 using MayFly.Api.Domain;
 using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
+using MayFly.Api.Mongo;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Provisioner.Contracts;
@@ -11,6 +12,7 @@ using MayFly.Provisioner.Engines;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using MySqlConnector;
 using Xunit;
 
@@ -52,7 +54,7 @@ public class MySqlEngineClientTests
 
             var registry = new EngineClientRegistry(new IEngineClient[] { new MySqlEngineClient() });
             var executor  = new QueryExecutor(secrets, cfg, registry);
-            var enforcer  = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance, registry);
+            var enforcer  = new QuotaEnforcer(secrets, cfg, NullLogger<QuotaEnforcer>.Instance, registry, Mock.Of<IMongoOps>());
 
             // Wait for MySQL to be ready via the executor
             await WaitReadyAsync(executor, inst);

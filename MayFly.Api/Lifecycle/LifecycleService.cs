@@ -1,6 +1,7 @@
 using MayFly.Api.Data;
 using MayFly.Api.Domain;
 using MayFly.Api.Engines;
+using MayFly.Api.Mongo;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Services;
 using Microsoft.EntityFrameworkCore;
@@ -88,6 +89,7 @@ public sealed class LifecycleService(
         var db = scope.ServiceProvider.GetRequiredService<MayFlyContext>();
         var prov = scope.ServiceProvider.GetRequiredService<IProvisionerClient>();
         var queryExec = scope.ServiceProvider.GetRequiredService<IQueryExecutor>();
+        var mongoOps = scope.ServiceProvider.GetRequiredService<IMongoOps>();
         var enforcer = scope.ServiceProvider.GetService<QuotaEnforcer>();
         var now = DateTime.UtcNow;
 
@@ -113,10 +115,21 @@ public sealed class LifecycleService(
         {
             try
             {
-                var result = await queryExec.ExecuteAsync(inst, registry.For(inst.Engine).SizeQuerySql(inst.DbName), ct);
-                if (result.Success && result.Rows.Count == 1 && result.Rows[0].Length == 1)
+                long? sizeBytes = null;
+                if (inst.Engine == "mongo")
                 {
-                    inst.LastSizeBytes = Convert.ToInt64(result.Rows[0][0]);
+                    sizeBytes = await mongoOps.GetSizeBytesAsync(inst, ct);
+                }
+                else
+                {
+                    var result = await queryExec.ExecuteAsync(inst, registry.For(inst.Engine).SizeQuerySql(inst.DbName), ct);
+                    if (result.Success && result.Rows.Count == 1 && result.Rows[0].Length == 1)
+                        sizeBytes = Convert.ToInt64(result.Rows[0][0]);
+                }
+
+                if (sizeBytes.HasValue)
+                {
+                    inst.LastSizeBytes = sizeBytes.Value;
                     if (enforcer is not null)
                     {
                         try { await enforcer.EnforceAsync(inst, inst.LastSizeBytes, ct); }

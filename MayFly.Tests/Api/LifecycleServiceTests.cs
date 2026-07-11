@@ -3,6 +3,7 @@ using MayFly.Api.Data;
 using MayFly.Api.Domain;
 using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
+using MayFly.Api.Mongo;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Services;
 using Microsoft.EntityFrameworkCore;
@@ -121,6 +122,7 @@ public class LifecycleServiceTests : IAsyncLifetime
         var prov = new Mock<IProvisionerClient>();
         services.AddSingleton(prov.Object);
         services.AddScoped(_ => Mock.Of<IQueryExecutor>());
+        services.AddScoped(_ => Mock.Of<IMongoOps>());
         var sp = services.BuildServiceProvider();
 
         using (var scope = sp.CreateScope())

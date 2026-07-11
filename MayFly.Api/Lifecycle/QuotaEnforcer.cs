@@ -1,19 +1,29 @@
 using System.Text.RegularExpressions;
 using MayFly.Api.Domain;
 using MayFly.Api.Engines;
+using MayFly.Api.Mongo;
 using MayFly.Api.Security;
 
 namespace MayFly.Api.Lifecycle;
 
 public sealed class QuotaEnforcer(
     ISecretProtector secrets, IConfiguration cfg, ILogger<QuotaEnforcer> log,
-    EngineClientRegistry registry)
+    EngineClientRegistry registry, IMongoOps mongoOps)
 {
     private static readonly Regex SafeIdentifier = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
 
     public async Task EnforceAsync(Instance inst, long sizeBytes, CancellationToken ct)
     {
         if (sizeBytes < (long)inst.StorageQuotaMb * 1024 * 1024) return;
+
+        if (inst.Engine == "mongo")
+        {
+            await mongoOps.SoftEnforceReadOnlyAsync(inst, ct);
+            log.LogInformation(
+                "Quota: flipped {DbUser} read-only on mongo instance (size={SizeBytes} >= quota={QuotaMb} MiB)",
+                inst.DbUser, sizeBytes, inst.StorageQuotaMb);
+            return;
+        }
 
         if (!SafeIdentifier.IsMatch(inst.DbUser))
             throw new InvalidOperationException(

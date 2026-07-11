@@ -6,4 +6,6 @@ namespace MayFly.Api.Mongo;
 public interface IMongoOps
 {
     Task<QueryResultDto> RunConsoleAsync(Instance inst, string command, CancellationToken ct);
+    Task<long> GetSizeBytesAsync(Instance inst, CancellationToken ct);
+    Task SoftEnforceReadOnlyAsync(Instance inst, CancellationToken ct);
 }

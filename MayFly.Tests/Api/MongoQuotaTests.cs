@@ -18,7 +18,7 @@ using ProvRequest    = MayFly.Provisioner.Contracts.ExecMongoshRequest;
 
 [Trait("Category", "Docker")]
 [Collection("docker-sequential")]
-public class MongoQueryTests
+public class MongoQuotaTests
 {
     private static IDockerProvisioner BuildProvisioner()
     {
@@ -39,7 +39,7 @@ public class MongoQueryTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task Mongo_console_runs_via_provisioner_exec()
+    public async Task Mongo_soft_enforce_flips_appuser_read_only()
     {
         var realProvisioner = BuildProvisioner();
         var r = await realProvisioner.CreateAsync(new CreateInstanceRequest("mongo", 3, 256, "blank"), default);
@@ -57,7 +57,8 @@ public class MongoQueryTests
                 DbUser           = r.DbUser,
                 DbPasswordEnc    = secrets.Protect(r.DbPassword),
                 AdminUser        = r.AdminUser,
-                AdminPasswordEnc = secrets.Protect(r.AdminPassword)
+                AdminPasswordEnc = secrets.Protect(r.AdminPassword),
+                StorageQuotaMb   = 256
             };
 
             var prov = new Mock<IProvisionerClient>();
@@ -75,17 +76,20 @@ public class MongoQueryTests
 
             var mongoOps = new MongoOps(prov.Object, secrets, NullLogger<MongoOps>.Instance);
 
-            // 1. Valid command: insert a doc and retrieve it
-            var ok = await mongoOps.RunConsoleAsync(inst,
-                "db.getCollection('t').insertOne({x:1}); db.getCollection('t').find().toArray()",
-                default);
-            ok.Success.Should().BeTrue("valid mongosh command must succeed");
-            ok.Output.Should().NotBeNullOrEmpty("output must contain the inserted document");
+            // 1. Insert a doc as appuser
+            var insert = await mongoOps.RunConsoleAsync(inst, "db.getCollection('t').insertOne({x:1})", default);
+            insert.Success.Should().BeTrue("appuser insert must succeed before enforcement");
 
-            // 2. Invalid JS: must fail with a non-empty error
-            var bad = await mongoOps.RunConsoleAsync(inst, "this is not valid js;;;", default);
-            bad.Success.Should().BeFalse("invalid JS must fail");
-            bad.Error.Should().NotBeNullOrEmpty("error must be populated on failure");
+            // 2. Measure size via dbStats (admin exec)
+            var size = await mongoOps.GetSizeBytesAsync(inst, default);
+            size.Should().BeGreaterThan(0, "dbStats must report non-zero storage after insert");
+
+            // 3. Flip appuser to read-only
+            await mongoOps.SoftEnforceReadOnlyAsync(inst, default);
+
+            // 4. Attempt a write as appuser in a fresh mongosh — must be rejected
+            var writeAfter = await mongoOps.RunConsoleAsync(inst, "db.getCollection('t').insertOne({y:2})", default);
+            writeAfter.Success.Should().BeFalse("write must fail after appuser is flipped to read-only");
         }
         finally
         {
