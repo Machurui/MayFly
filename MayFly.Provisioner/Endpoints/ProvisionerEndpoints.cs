@@ -44,5 +44,9 @@ public static class ProvisionerEndpoints
             await p.SweepOrphansAsync(req.ActiveVolumeNames, ct);
             return Results.NoContent();
         });
+
+        app.MapPost("/instances/{containerId}/exec-mongosh",
+            async (string containerId, ExecMongoshRequest req, IDockerProvisioner p, CancellationToken ct)
+                => Results.Ok(await p.ExecMongoshAsync(containerId, req, ct)));
     }
 }

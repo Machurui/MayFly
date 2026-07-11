@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Formats.Tar;
 using System.Text;
 using Docker.DotNet;
@@ -199,30 +200,13 @@ public sealed class DockerProvisioner : IDockerProvisioner
             // message — a silent failure here would leave a broken instance with no app user.
             if (!provider.UsesInitVolume && setup.PostReadyExec is not null)
             {
-                var execCreate = await _docker.Exec.CreateContainerExecAsync(
-                    containerId,
-                    new ContainerExecCreateParameters
-                    {
-                        Cmd = new List<string>(setup.PostReadyExec),
-                        AttachStdout = true,
-                        AttachStderr = true
-                    },
-                    ct);
-                using var execStream = await _docker.Exec.StartContainerExecAsync(
-                    execCreate.ID,
-                    new ContainerExecStartParameters { Detach = false },
-                    ct);
-                using var stdoutBuf = new System.IO.MemoryStream();
-                using var stderrBuf = new System.IO.MemoryStream();
-                await execStream.CopyOutputToAsync(Stream.Null, stdoutBuf, stderrBuf, ct);
-
-                var execInspect = await _docker.Exec.InspectContainerExecAsync(execCreate.ID, ct);
-                if (execInspect.ExitCode != 0)
+                const int postReadyMaxBytes = 64 * 1024;
+                var (exitCode, stdout, stderr, _) = await ExecCaptureAsync(
+                    containerId, new List<string>(setup.PostReadyExec), env: null, postReadyMaxBytes, ct);
+                if (exitCode != 0)
                 {
-                    var stdout = System.Text.Encoding.UTF8.GetString(stdoutBuf.ToArray());
-                    var stderr = System.Text.Encoding.UTF8.GetString(stderrBuf.ToArray());
                     throw new InvalidOperationException(
-                        $"PostReadyExec exited with code {execInspect.ExitCode}. " +
+                        $"PostReadyExec exited with code {exitCode}. " +
                         $"stdout: {stdout.Trim()} | stderr: {stderr.Trim()}");
                 }
             }
@@ -485,6 +469,134 @@ public sealed class DockerProvisioner : IDockerProvisioner
                    UnixFileMode.GroupRead | UnixFileMode.OtherRead
         };
         tw.WriteEntry(entry);
+    }
+
+    // -------------------------------------------------------------------------
+    // ExecMongoshAsync
+    // -------------------------------------------------------------------------
+
+    public async Task<ExecMongoshResult> ExecMongoshAsync(
+        string containerId, ExecMongoshRequest req, CancellationToken ct)
+    {
+        // Pass the user's JS (MONGO_CMD) and the password (MONGO_PWD) via the exec's ENV so
+        // neither is visible on the shell command line or in docker inspect. The double-quoted
+        // $MONGO_CMD / $MONGO_PWD expansions inside `sh -c` are not parsed by the shell as
+        // command text, so there is no shell-injection surface even when the user's JS contains
+        // special characters.
+        var sh = $"timeout {req.TimeoutSeconds} mongosh --quiet --host 127.0.0.1 -u {req.User} " +
+                 $"-p \"$MONGO_PWD\" --authenticationDatabase {req.AuthDb} appdb --eval \"$MONGO_CMD\"";
+        var cmd = new List<string> { "sh", "-c", sh };
+        var env = new List<string> { $"MONGO_PWD={req.Password}", $"MONGO_CMD={req.Command}" };
+
+        // Outer safety CTS: cancels after TimeoutSeconds + 5 s so the API call can never hang
+        // even if the container-side `timeout` misbehaves.
+        using var outerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        outerCts.CancelAfter(TimeSpan.FromSeconds(req.TimeoutSeconds + 5));
+
+        var sw = Stopwatch.StartNew();
+        var (exit, outStr, errStr, truncated) =
+            await ExecCaptureAsync(containerId, cmd, env, req.MaxOutputBytes, outerCts.Token);
+        return new ExecMongoshResult(outStr, errStr, exit, truncated, (int)sw.ElapsedMilliseconds);
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared exec helper
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates and runs a docker exec, capturing stdout and stderr into strings capped at
+    /// <paramref name="maxBytes"/> total (combined). A <see cref="CappedStream"/> discards bytes
+    /// beyond the cap during streaming so that a runaway <c>print</c> loop cannot OOM the
+    /// Provisioner process. Returns the exit code, captured strings, and a truncation flag.
+    /// </summary>
+    private async Task<(int exit, string stdout, string stderr, bool truncated)> ExecCaptureAsync(
+        string containerId, IList<string> cmd, IList<string>? env, int maxBytes, CancellationToken ct)
+    {
+        var execParams = new ContainerExecCreateParameters
+        {
+            Cmd = new List<string>(cmd),
+            AttachStdout = true,
+            AttachStderr = true
+        };
+        if (env is not null) execParams.Env = new List<string>(env);
+        var execCreate = await _docker.Exec.CreateContainerExecAsync(containerId, execParams, ct);
+
+        using var execStream = await _docker.Exec.StartContainerExecAsync(
+            execCreate.ID,
+            new ContainerExecStartParameters { Detach = false },
+            ct);
+
+        // Each of stdout and stderr gets its own cap; the total readable bytes is at most
+        // 2 × maxBytes, which is acceptable for the console use-case. An alternative would be
+        // a single shared cap, but per-stream caps keep the implementation simpler.
+        using var stdoutCapped = new CappedStream(maxBytes);
+        using var stderrCapped = new CappedStream(maxBytes);
+        await execStream.CopyOutputToAsync(Stream.Null, stdoutCapped, stderrCapped, ct);
+
+        var execInspect = await _docker.Exec.InspectContainerExecAsync(execCreate.ID, ct);
+
+        var stdout = Encoding.UTF8.GetString(stdoutCapped.Buffer, 0, stdoutCapped.BytesWritten);
+        var stderr = Encoding.UTF8.GetString(stderrCapped.Buffer, 0, stderrCapped.BytesWritten);
+        bool truncated = stdoutCapped.Truncated || stderrCapped.Truncated;
+
+        return ((int)(execInspect.ExitCode ?? 0), stdout, stderr, truncated);
+    }
+
+    // -------------------------------------------------------------------------
+    // CappedStream: accepts up to maxBytes, discards the rest, sets Truncated flag
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// A write-only stream that accepts up to <see cref="MaxBytes"/> bytes and then
+    /// silently discards further writes while setting <see cref="Truncated"/> to true.
+    /// Used as the output target for docker exec streams to bound memory usage even if
+    /// the container produces arbitrarily large output.
+    /// </summary>
+    private sealed class CappedStream : Stream
+    {
+        private readonly int _maxBytes;
+        private int _written;
+        private bool _truncated;
+
+        public CappedStream(int maxBytes)
+        {
+            _maxBytes = maxBytes;
+            Buffer = new byte[maxBytes];
+        }
+
+        public byte[] Buffer { get; }
+        public int BytesWritten => _written;
+        public bool Truncated => _truncated;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _written;
+        public override long Position { get => _written; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            int remaining = _maxBytes - _written;
+            if (remaining <= 0)
+            {
+                _truncated = true;
+                return;
+            }
+            int toCopy = Math.Min(count, remaining);
+            System.Buffer.BlockCopy(buffer, offset, Buffer, _written, toCopy);
+            _written += toCopy;
+            if (toCopy < count) _truncated = true;
+        }
+
+        public override void WriteByte(byte value)
+        {
+            if (_written >= _maxBytes) { _truncated = true; return; }
+            Buffer[_written++] = value;
+        }
     }
 
     private async Task EnsureImageAsync(string image, CancellationToken ct)
