@@ -27,6 +27,7 @@ public class Program
         builder.Services.AddSingleton<IEngineProvider, MySqlEngineProvider>();
         builder.Services.AddSingleton<IEngineProvider, MariaDbEngineProvider>();
         builder.Services.AddSingleton<IEngineProvider, SqlServerEngineProvider>();
+        builder.Services.AddSingleton<IEngineProvider, MongoEngineProvider>();
         builder.Services.AddSingleton<IDockerProvisioner, DockerProvisioner>();
 
         var app = builder.Build();
