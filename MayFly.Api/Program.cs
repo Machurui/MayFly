@@ -36,7 +36,7 @@ builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
-builder.Services.AddSingleton<IMongoOps, MongoOps>();
+builder.Services.AddScoped<IMongoOps, MongoOps>();
 builder.Services.AddScoped<DashboardService>();
 builder.Services.AddScoped<QuotaEnforcer>();
 builder.Services.AddHostedService<LifecycleService>();
