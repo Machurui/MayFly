@@ -7,6 +7,7 @@ export interface CreateInstanceDto { engine: string; ttlHours: number; storageMb
 export interface QueryResultDto {
   success: boolean; columns: string[]; rows: unknown[][]; rowCount: number;
   durationMs: number; message: string; error: string | null;
+  output?: string; truncated?: boolean;
 }
 export interface DashboardSummary {
   aliveCount: number; maxAlive: number; queriesToday: number;

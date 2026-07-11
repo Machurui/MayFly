@@ -1,6 +1,7 @@
 using MayFly.Api.Data;
 using MayFly.Api.Engines;
 using MayFly.Api.Lifecycle;
+using MayFly.Api.Mongo;
 using MayFly.Api.Provisioning;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
@@ -35,6 +36,7 @@ builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
+builder.Services.AddSingleton<IMongoOps, MongoOps>();
 builder.Services.AddScoped<DashboardService>();
 builder.Services.AddScoped<QuotaEnforcer>();
 builder.Services.AddHostedService<LifecycleService>();

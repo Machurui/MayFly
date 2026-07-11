@@ -2,6 +2,7 @@ using MayFly.Api.Data;
 using MayFly.Api.Domain;
 using MayFly.Api.Dtos;
 using MayFly.Api.Engines;
+using MayFly.Api.Mongo;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
 using MayFly.Api.Validation;
@@ -14,16 +15,23 @@ namespace MayFly.Api.Controllers;
 [Route("api/instances")]
 public sealed class InstancesController(
     IInstanceService instances, IQueryExecutor queryExec, ISecretProtector secrets, IConfiguration cfg,
-    MayFlyContext db, EngineClientRegistry registry)
+    MayFlyContext db, EngineClientRegistry registry, IMongoOps mongoOps)
     : ControllerBase
 {
     private string PublicHost => cfg["PublicHost"] ?? "localhost";
     private string Sid => HttpContext.Items[SessionCookieMiddleware.CookieName] as string ?? "";
     private string Ip => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "0.0.0.0";
 
-    private string DisplayCs(Instance i) =>
-        registry.For(i.Engine).BuildDisplayConnectionString(
+    private string DisplayCs(Instance i)
+    {
+        if (i.Engine == "mongo")
+        {
+            var pwd = secrets.Unprotect(i.DbPasswordEnc);
+            return $"mongodb://{i.DbUser}:{pwd}@{PublicHost}:{i.PublicPort}/{i.DbName}";
+        }
+        return registry.For(i.Engine).BuildDisplayConnectionString(
             PublicHost, i.PublicPort, i.DbName, i.DbUser, secrets.Unprotect(i.DbPasswordEnc));
+    }
 
     [HttpPost]
     [EnableRateLimiting("create")]
@@ -64,7 +72,9 @@ public sealed class InstancesController(
     {
         var inst = await instances.GetByTokenAsync(token, ct);
         if (inst is null) return NotFound();
-        var result = await queryExec.ExecuteAsync(inst, body.Sql, ct);
+        var result = inst.Engine == "mongo"
+            ? await mongoOps.RunConsoleAsync(inst, body.Query, ct)
+            : await queryExec.ExecuteAsync(inst, body.Query, ct);
         try
         {
             db.QueryLogs.Add(new QueryLog

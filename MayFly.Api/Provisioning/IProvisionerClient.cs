@@ -8,4 +8,5 @@ public interface IProvisionerClient
     Task<IReadOnlyList<ManagedContainer>> ListManagedAsync(CancellationToken ct);
     Task DestroyByInstanceAsync(string instanceId, CancellationToken ct);
     Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct);
+    Task<ExecMongoshResult> ExecMongoshAsync(string containerId, ExecMongoshRequest req, CancellationToken ct);
 }

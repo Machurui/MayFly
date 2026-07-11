@@ -5,5 +5,7 @@ public record ProvisionResult(string ContainerId, string VolumeName, string Inte
                               string AdminUser, string AdminPassword);
 public record ProvisionInspect(string State, long SizeBytes);
 public record ManagedContainer(string ContainerId, string InstanceId);
+public record ExecMongoshRequest(string Command, string User, string Password, string AuthDb, int TimeoutSeconds, int MaxOutputBytes);
+public record ExecMongoshResult(string Output, string Error, int ExitCode, bool Truncated, int Ms);
 internal record CreateBody(string Engine, int TtlHours, int StorageMb, string InitialData);
 internal record SweepOrphansBody(IReadOnlyCollection<string> ActiveVolumeNames);

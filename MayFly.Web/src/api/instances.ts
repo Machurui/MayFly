@@ -6,8 +6,8 @@ export const createInstance = (dto: CreateInstanceDto) => api.post<InstanceDto>(
 export const getInstance = (token: string) => api.get<InstanceDto>(`/api/instances/${token}`)
 export const listMine = () => api.get<InstanceDto[]>('/api/instances')
 export const destroyInstance = (token: string) => api.del(`/api/instances/${token}`)
-export const runQuery = (token: string, sql: string) =>
-  api.post<QueryResultDto>(`/api/instances/${token}/query`, { sql })
+export const runQuery = (token: string, query: string) =>
+  api.post<QueryResultDto>(`/api/instances/${token}/query`, { query })
 export const getDashboard = () => api.get<DashboardSummary>('/api/dashboard')
 
 export const useMyInstances = () =>

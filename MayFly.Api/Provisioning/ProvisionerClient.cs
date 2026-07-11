@@ -43,4 +43,11 @@ public sealed class ProvisionerClient(HttpClient http) : IProvisionerClient
         var resp = await http.PostAsJsonAsync("/sweep-orphans", new SweepOrphansBody(activeVolumeNames), ct);
         resp.EnsureSuccessStatusCode();
     }
+
+    public async Task<ExecMongoshResult> ExecMongoshAsync(string containerId, ExecMongoshRequest req, CancellationToken ct)
+    {
+        var resp = await http.PostAsJsonAsync($"/instances/{containerId}/exec-mongosh", req, ct);
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<ExecMongoshResult>(cancellationToken: ct))!;
+    }
 }
