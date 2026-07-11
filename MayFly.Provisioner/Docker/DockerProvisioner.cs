@@ -478,12 +478,20 @@ public sealed class DockerProvisioner : IDockerProvisioner
     public async Task<ExecMongoshResult> ExecMongoshAsync(
         string containerId, ExecMongoshRequest req, CancellationToken ct)
     {
+        // Validate interpolated identifiers: User and AuthDb land in a shell-parsed context,
+        // so restrict them to alphanumerics and underscore to prevent injection.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(req.User, "^[A-Za-z0-9_]+$"))
+            throw new ArgumentException("invalid user", nameof(req));
+        if (!System.Text.RegularExpressions.Regex.IsMatch(req.AuthDb, "^[A-Za-z0-9_]+$"))
+            throw new ArgumentException("invalid authDb", nameof(req));
+
         // Pass the user's JS (MONGO_CMD) and the password (MONGO_PWD) via the exec's ENV so
         // neither is visible on the shell command line or in docker inspect. The double-quoted
         // $MONGO_CMD / $MONGO_PWD expansions inside `sh -c` are not parsed by the shell as
         // command text, so there is no shell-injection surface even when the user's JS contains
         // special characters.
-        var sh = $"timeout {req.TimeoutSeconds} mongosh --quiet --host 127.0.0.1 -u {req.User} " +
+        var secs = Math.Clamp(req.TimeoutSeconds, 1, 120);
+        var sh = $"timeout {secs} mongosh --quiet --host 127.0.0.1 -u {req.User} " +
                  $"-p \"$MONGO_PWD\" --authenticationDatabase {req.AuthDb} appdb --eval \"$MONGO_CMD\"";
         var cmd = new List<string> { "sh", "-c", sh };
         var env = new List<string> { $"MONGO_PWD={req.Password}", $"MONGO_CMD={req.Command}" };
@@ -491,7 +499,7 @@ public sealed class DockerProvisioner : IDockerProvisioner
         // Outer safety CTS: cancels after TimeoutSeconds + 5 s so the API call can never hang
         // even if the container-side `timeout` misbehaves.
         using var outerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        outerCts.CancelAfter(TimeSpan.FromSeconds(req.TimeoutSeconds + 5));
+        outerCts.CancelAfter(TimeSpan.FromSeconds(secs + 5));
 
         var sw = Stopwatch.StartNew();
         var (exit, outStr, errStr, truncated) =
@@ -504,8 +512,8 @@ public sealed class DockerProvisioner : IDockerProvisioner
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Creates and runs a docker exec, capturing stdout and stderr into strings capped at
-    /// <paramref name="maxBytes"/> total (combined). A <see cref="CappedStream"/> discards bytes
+    /// Creates and runs a docker exec, capturing stdout and stderr into strings. Each stream
+    /// is capped at <paramref name="maxBytes"/> individually. A <see cref="CappedStream"/> discards bytes
     /// beyond the cap during streaming so that a runaway <c>print</c> loop cannot OOM the
     /// Provisioner process. Returns the exit code, captured strings, and a truncation flag.
     /// </summary>
@@ -539,7 +547,7 @@ public sealed class DockerProvisioner : IDockerProvisioner
         var stderr = Encoding.UTF8.GetString(stderrCapped.Buffer, 0, stderrCapped.BytesWritten);
         bool truncated = stdoutCapped.Truncated || stderrCapped.Truncated;
 
-        return ((int)(execInspect.ExitCode ?? 0), stdout, stderr, truncated);
+        return ((int)(execInspect.ExitCode ?? -1), stdout, stderr, truncated);
     }
 
     // -------------------------------------------------------------------------
