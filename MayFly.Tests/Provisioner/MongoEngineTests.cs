@@ -71,8 +71,22 @@ public class MongoEngineTests
             var adminOpEx = await Assert.ThrowsAnyAsync<MongoException>(
                 () => otherDb.GetCollection<MongoDB.Bson.BsonDocument>("t")
                              .InsertOneAsync(new MongoDB.Bson.BsonDocument("probe", 1)));
-            adminOpEx.Should().NotBeNull(
-                "write to 'other' db must be rejected for appuser (readWrite scoped to appdb only)");
+
+            // MongoDB "Unauthorized" is error code 13. Verify the rejection is actually an
+            // authorization denial, not a connection/timeout failure.
+            if (adminOpEx is MongoDB.Driver.MongoWriteException we)
+            {
+                we.WriteError?.Code.Should().Be(13, "unauthorized write must be code 13, not a connection/timeout failure");
+            }
+            else if (adminOpEx is MongoDB.Driver.MongoCommandException ce)
+            {
+                ce.Code.Should().Be(13, "unauthorized write must be code 13, not a connection/timeout failure");
+            }
+            else
+            {
+                adminOpEx.Message.Should().MatchRegex("(?i)not authorized|unauthorized",
+                    "the rejection must be an authorization denial, not a connection/timeout failure");
+            }
 
             // --- 3. Egress probe from DB container must fail ---
             // mongo:7 is Debian — has bash and /dev/tcp
