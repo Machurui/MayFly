@@ -1,8 +1,8 @@
 # MayFly Security
 
 MayFly is a public ephemeral-database service: any visitor receives a
-short-lived, isolated database instance (PostgreSQL, MySQL, MariaDB, or SQL
-Server) reachable over the public internet. This document describes the
+short-lived, isolated database instance (PostgreSQL, MySQL, MariaDB, SQL
+Server, or MongoDB) reachable over the public internet. This document describes the
 security controls deployed, host prerequisites, and residual risks.
 
 ---
@@ -62,6 +62,17 @@ via `docker exec sqlcmd` (see §4.3). `appuser` is a SQL Server Login mapped
 to a database user with `db_datareader`, `db_datawriter`, and `db_ddladmin`
 roles on `appdb`. It has no server-level (`sysadmin`, `securityadmin`)
 privileges.
+
+**MongoDB** — roles are created by a `docker-entrypoint-initdb.d/00-roles.js`
+init script (executed by mongo:7 at first-start initialisation, before port
+27017 opens). `appuser` receives `readWrite` on `appdb` only; the admin
+credential (`mayflyadmin`) is never returned to users. MongoDB has no FILE or
+SUPER equivalent: `appuser` can read and write documents in `appdb` but cannot
+modify server configuration, access other databases, or run privileged
+operations. The admin password (`AdminPasswordEnc`) is used only by the
+`QuotaEnforcer` when revoking `appuser`'s `readWrite` to `read` after a
+disk-quota breach — both operations run through the provisioner exec channel
+(see §4.4).
 
 The `appuser` password is generated with 128 bits of randomness per
 instance and is stored encrypted in the metadata database
@@ -172,6 +183,57 @@ The Provisioner itself is **not** on the `mayfly-users` network; it reaches
 the container via `docker exec` (a control-plane call through the Docker
 socket), not via a direct TCP connection. This preserves the property that
 only `MayFly.Api` can reach user DB containers over the network.
+
+### 4.4 MongoDB exec-channel security model
+
+MongoDB differs from the SQL engines in how queries are executed: instead of
+a driver connecting over the wire, arbitrary user-supplied mongosh JavaScript
+is run via `docker exec` inside the user's own container.
+
+**Execution scope** — The Provisioner calls `docker exec mongosh --eval` on
+the user's own DB container; mongosh connects to `127.0.0.1` (loopback) and
+authenticates as `appuser` (`readWrite` on `appdb` only). `MayFly.Api` holds
+no MongoDB driver and never speaks the MongoDB wire protocol. The user's JS
+never runs inside the API process.
+
+**Container isolation** — by the time the exec runs, the container is already
+subject to all hardening controls: egress-blocked (`mayfly-users` internal
+network, §3.1), read-only rootfs (mongosh runs from the existing mongo:7
+binaries, no FS writes by the eval), resource-limited (1 GiB memory, 1 CPU,
+200 pids), capability-dropped with `no-new-privileges`, and disposable (TTL
+reap destroys it). Only mssql relaxes the read-only rootfs; mongo retains it.
+
+**Timeout and output cap** — mongosh is invoked as `sh -c "timeout <N>
+mongosh …"`, where `N` is bounded by the exec request (max 120 s enforced by
+the Provisioner). An outer `CancellationTokenSource` set to `N + 5 s` is
+linked to the request's `CancellationToken`, so the API call cannot hang even
+if the container-side `timeout` misbehaves. Stdout and stderr are captured
+into per-stream `CappedStream` buffers (256 KiB for console, 64 KiB for admin
+ops); bytes beyond the cap are silently discarded and a `truncated:true` flag
+is set in the response. A runaway `print` loop cannot exhaust Provisioner
+memory.
+
+**No shell-injection surface** — the user's JS command and the `appuser`
+password are delivered to the exec environment as `MONGO_CMD` and `MONGO_PWD`
+respectively, not on the shell command line. The `sh -c` string expands only
+`$MONGO_CMD` and `$MONGO_PWD` as variable references — they are never
+interpolated into the shell command text as literal fragments. Identifiers
+that ARE embedded in the shell string (`user`, `authDb`) are validated against
+a strict `^[A-Za-z0-9_]+$` regex before the exec is constructed, providing a
+defence-in-depth injection guard.
+
+**Admin operations via the same channel** — database size measurement (mongosh
+`dbStats`) and quota soft-enforce (revoking `appuser` `readWrite` → `read`)
+also run through `ExecMongoshAsync`, authenticating as `mayflyadmin` against
+the `admin` database. This preserves the property that the Provisioner never
+requires a TCP path to user DB containers; all interaction is through the
+Docker socket.
+
+**Exec endpoint authentication** — `ExecMongoshAsync` is exposed only via
+`MayFly.Provisioner`'s internal HTTP API, which requires a valid
+`X-Provisioner-Key` header on every request (rejected with HTTP 401
+otherwise). The Provisioner has no published host port and is reachable only
+from `MayFly.Api` over the `mayfly-internal` compose network (§1.2).
 
 ---
 

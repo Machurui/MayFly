@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# MayFly full-stack end-to-end smoke test — all four engines.
+# MayFly full-stack end-to-end smoke test — all five engines.
 # Builds all images, brings up the complete stack, exercises checks through
-# Caddy on http://localhost for each engine (postgres/mysql/mariadb/mssql),
+# Caddy on http://localhost for each engine (postgres/mysql/mariadb/mssql/mongo),
 # then tears everything down on EXIT.
 #
 # Preamble checks (run once):
@@ -11,10 +11,10 @@
 # Per-engine checks (run sequentially; each DB is deleted before the next is created):
 #   A. POST /api/instances {engine}  → 201 with token + connectionString
 #   B. Egress probe (best-effort)    → DB container has no outbound internet
-#   C. POST /api/instances/{token}/query  → success:true [, count>0 for Northwind]
+#   C. POST /api/instances/{token}/query  → success:true [, count>0 for Northwind / output contains value for mongo]
 #   D. DELETE /api/instances/{token} → 204; no leftover DB/sidecar containers
 #
-# Engines: postgres (Northwind seed), mysql (blank), mariadb (blank), mssql (blank, 300s)
+# Engines: postgres (Northwind seed), mysql (blank), mariadb (blank), mssql (blank, 300s), mongo (blank)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -79,8 +79,9 @@ wait_for_http() {
 }
 
 # ── test_engine <engine> <storageMb> <initialData> <query> <expect> ───────────
-# <expect>: "count" → assert rows[0][0] > 0 (Northwind seed check)
-#           "success" → assert success:true only
+# <expect>: "count"          → assert rows[0][0] > 0 (Northwind seed check)
+#           "success"        → assert success:true only
+#           "output:<substr>"→ assert success:true AND output field contains <substr> (mongo)
 # Egress probe is best-effort: WARN+SKIP if probe tool unavailable; REACHED is a hard fail.
 test_engine() {
   local engine="$1" storageMb="$2" initialData="$3" query="$4" expect="$5"
@@ -159,13 +160,13 @@ test_engine() {
 
   # --- C: Query ---
   echo ""
-  echo "${label} C: POST /api/instances/$token/query  sql=\"$query\""
+  echo "${label} C: POST /api/instances/$token/query  query=\"$query\""
   local query_resp query_status query_body
   query_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
     -w "\n__STATUS__:%{http_code}" --max-time 30 \
     -X POST "http://localhost/api/instances/$token/query" \
     -H 'Content-Type: application/json' \
-    -d "{\"sql\":\"${query}\"}" \
+    -d "{\"query\":\"${query}\"}" \
     2>/dev/null || echo "__STATUS__:000")
   query_status=$(echo "$query_resp" | grep '__STATUS__:' | cut -d: -f2)
   query_body=$(echo "$query_resp" | grep -v '__STATUS__:')
@@ -184,6 +185,18 @@ test_engine() {
       check_pass "${label} C: query → success:true, count=$q_count (Northwind confirmed)"
     else
       check_fail "${label} C: query → failed or count=0 (success=$q_success count=$q_count)"
+    fi
+  elif [[ "$expect" == output:* ]]; then
+    # mongo: check success:true AND that the output field contains the expected substring
+    local expect_substr="${expect#output:}"
+    local q_output
+    q_output=$(echo "$query_body" | python3 -c \
+      "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
+    echo "  success=$q_success  output=$q_output"
+    if [[ "$q_success" == "True" ]] && echo "$q_output" | grep -q "$expect_substr"; then
+      check_pass "${label} C: query → success:true, output contains '$expect_substr'"
+    else
+      check_fail "${label} C: query → failed (success=$q_success, output='$q_output', expected to contain '$expect_substr')"
     fi
   else
     echo "  success=$q_success"
@@ -223,7 +236,7 @@ test_engine() {
 echo "============================================"
 echo "MayFly Full-Stack E2E — All Engines"
 echo "  Entry point: http://localhost"
-echo "  Engines: postgres / mysql / mariadb / mssql"
+echo "  Engines: postgres / mysql / mariadb / mssql / mongo"
 echo "============================================"
 echo ""
 
@@ -231,6 +244,9 @@ cd "$REPO"
 
 # ── STEP 1: Build all images and start the full stack ─────────────────────────
 echo "=== STEP 1: docker compose up -d --build (may take several minutes first run) ==="
+# Pre-remove any stale provisioner-managed networks (e.g. left by integration tests)
+# so compose can (re-)create them with the correct compose labels.
+docker network rm mayfly-users mayfly-ingress mayfly-internal 2>/dev/null || true
 docker compose up -d --build
 echo "  Stack started."
 
@@ -321,6 +337,9 @@ test_engine mariadb   256  blank      "SELECT 1"                        success
 
 # mssql: blank, 1 GiB (mssql 2 GiB memory floor), longer provision timeout (emulated on arm64)
 test_engine mssql     1024 blank      "SELECT 1"                        success
+
+# mongo: blank — verify mongosh JS exec (insert + count; response uses output field, not rows)
+test_engine mongo     256  blank      "db.getCollection('t').insertOne({x:1}); print(db.getCollection('t').countDocuments())"  "output:1"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
