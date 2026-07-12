@@ -51,10 +51,14 @@ function buildEditor(engine: string) {
   })
 }
 
-watch(() => inst.value?.engine, (engine) => {
-  if (!engine || view.value) return
-  buildEditor(engine)
-}, { immediate: true })
+watch(
+  [() => inst.value?.engine, editorEl],
+  ([engine]) => {
+    if (!engine || !editorEl.value || view.value) return
+    buildEditor(engine)
+  },
+  { immediate: true }
+)
 
 onUnmounted(() => {
   view.value?.destroy()

@@ -143,4 +143,21 @@ describe('ConsoleView', () => {
 
     w.unmount()
   })
+
+  it('mongo: builds editor even when instance is cached (engine known before ref bind)', async () => {
+    // Simulate warm cache: instance data is already populated when mount() runs
+    const instData = ref({ engine: 'mongo', token: 'tok-cached' })
+    useInstance.mockReturnValue({ data: instData })
+
+    const w = mount(ConsoleView, { props: { token: 'tok-cached' } })
+    // No instData.value assignment here; it's already set above
+
+    await nextTick()
+
+    // Editor should have been built despite engine being known before editorEl bound
+    // The JS editor's default doc contains 'db.'
+    expect(w.text()).toContain('db.')
+
+    w.unmount()
+  })
 })
