@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, shallowRef } from 'vue'
+import { ref, computed, onUnmounted, watch, shallowRef } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
+import { javascript } from '@codemirror/lang-javascript'
 import { keymap } from '@codemirror/view'
-import { runQuery } from '../api/instances'
+import { useInstance, runQuery } from '../api/instances'
 import type { QueryResultDto } from '../api/types'
 import QueryResults from '../components/QueryResults.vue'
 
 const props = defineProps<{ token: string }>()
+
+const { data: inst } = useInstance(props.token)
+const isMongo = computed(() => inst.value?.engine === 'mongo')
 
 const editorEl = ref<HTMLDivElement>()
 const view = shallowRef<EditorView>()
@@ -30,20 +34,27 @@ function clearEditor() {
   result.value = null
 }
 
-onMounted(() => {
+function buildEditor(engine: string) {
+  if (!editorEl.value) return
+  const mongo = engine === 'mongo'
   view.value = new EditorView({
-    parent: editorEl.value!,
-    doc: 'SELECT 1;',
+    parent: editorEl.value,
+    doc: mongo ? 'db.getCollection("items").find()' : 'SELECT 1;',
     extensions: [
       basicSetup,
-      sql({ dialect: PostgreSQL }),
+      mongo ? javascript() : sql({ dialect: PostgreSQL }),
       keymap.of([{
         key: 'Mod-Enter',
         run() { run(); return true },
       }]),
     ],
   })
-})
+}
+
+watch(() => inst.value?.engine, (engine) => {
+  if (!engine || view.value) return
+  buildEditor(engine)
+}, { immediate: true })
 
 onUnmounted(() => {
   view.value?.destroy()
@@ -72,6 +83,10 @@ onUnmounted(() => {
     </div>
 
     <!-- results -->
-    <QueryResults :result="result" />
+    <template v-if="isMongo">
+      <pre v-if="result" class="mongo-output">{{ result.success ? result.output : result.error }}</pre>
+      <p v-if="result?.truncated" class="truncated-note">output truncated</p>
+    </template>
+    <QueryResults v-else :result="result" />
   </div>
 </template>
