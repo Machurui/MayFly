@@ -15,8 +15,6 @@ public static class ApiSpecValidator
         if (!Ttls.Contains(d.TtlHours)) return (false, "ttl not allowed");
         if (!Storage.Contains(d.StorageMb)) return (false, "storage not allowed");
         if (!Init.Contains(d.InitialData)) return (false, "initialData not allowed");
-        if (d.InitialData == "northwind" && d.Engine != "postgres")
-            return (false, "initialData not allowed for this engine");
         return (true, null);
     }
 }

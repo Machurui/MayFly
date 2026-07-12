@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Docker.DotNet.Models;
+using MayFly.Provisioner.Seeding;
 
 namespace MayFly.Provisioner.Engines;
 
@@ -48,6 +49,9 @@ public sealed class SqlServerEngineProvider : IEngineProvider
             $"ALTER ROLE db_datareader ADD MEMBER [{appUser}];\n" +
             $"ALTER ROLE db_datawriter ADD MEMBER [{appUser}];\n" +
             $"ALTER ROLE db_ddladmin  ADD MEMBER [{appUser}];";
+
+        if (SeedCatalog.IsTemplate(initialData))
+            sql += "\nGO\nUSE [" + db + "];\nGO\n" + SeedCatalog.GetSql(initialData);
 
         var postReadyExec = new List<string>
         {

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Docker.DotNet.Models;
+using MayFly.Provisioner.Seeding;
 
 namespace MayFly.Provisioner.Engines;
 
@@ -27,14 +28,18 @@ public class MySqlEngineProvider : IEngineProvider
 
     public EngineSetup BuildSetup(EngineCredentials c, string initialData)
     {
-        // blank only for SP2 — no northwind for mysql
         var roles =
             $"CREATE USER '{c.AppUser}'@'%' IDENTIFIED BY '{Escape(c.AppPassword)}';\n" +
             $"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, INDEX, ALTER, REFERENCES " +
             $"ON `{c.Db}`.* TO '{c.AppUser}'@'%';\n" +
             "FLUSH PRIVILEGES;\n";
 
-        return new EngineSetup(new[] { ("00-roles.sql", roles) }, PostReadyExec: null);
+        var scripts = new List<(string FileName, string Sql)> { ("00-roles.sql", roles) };
+
+        if (SeedCatalog.IsTemplate(initialData))
+            scripts.Add(("01-seed.sql", SeedCatalog.GetSql(initialData)));
+
+        return new EngineSetup(scripts, PostReadyExec: null);
     }
 
     /// <summary>

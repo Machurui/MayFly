@@ -1,7 +1,6 @@
-using System.Reflection;
 using System.Security.Cryptography;
-using System.Text;
 using Docker.DotNet.Models;
+using MayFly.Provisioner.Seeding;
 
 namespace MayFly.Provisioner.Engines;
 
@@ -35,10 +34,9 @@ public sealed class PostgresEngineProvider : IEngineProvider
             ("00-roles.sql", BuildRolesSql(c))
         };
 
-        if (initialData == "northwind")
+        if (SeedCatalog.IsTemplate(initialData))
         {
-            var northwindSql = ReadEmbeddedNorthwind();
-            var seedSql = northwindSql +
+            var seedSql = SeedCatalog.GetSql(initialData) +
                 $"\nGRANT ALL ON ALL TABLES IN SCHEMA public TO {c.AppUser};" +
                 $"\nGRANT ALL ON ALL SEQUENCES IN SCHEMA public TO {c.AppUser};\n";
             scripts.Add(("01-seed.sql", seedSql));
@@ -80,12 +78,5 @@ public sealed class PostgresEngineProvider : IEngineProvider
             "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";\n";
     }
 
-    private static string ReadEmbeddedNorthwind()
-    {
-        var asm = Assembly.GetExecutingAssembly();
-        var res = asm.GetManifestResourceNames().Single(n => n.EndsWith("northwind.sql"));
-        using var stream = asm.GetManifestResourceStream(res)!;
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
-    }
+
 }
