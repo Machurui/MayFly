@@ -501,9 +501,10 @@ public sealed class DockerProvisioner : IDockerProvisioner
         using var outerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         outerCts.CancelAfter(TimeSpan.FromSeconds(secs + 5));
 
+        var maxBytes = Math.Clamp(req.MaxOutputBytes, 1, 1024 * 1024);
         var sw = Stopwatch.StartNew();
         var (exit, outStr, errStr, truncated) =
-            await ExecCaptureAsync(containerId, cmd, env, req.MaxOutputBytes, outerCts.Token);
+            await ExecCaptureAsync(containerId, cmd, env, maxBytes, outerCts.Token);
         return new ExecMongoshResult(outStr, errStr, exit, truncated, (int)sw.ElapsedMilliseconds);
     }
 
