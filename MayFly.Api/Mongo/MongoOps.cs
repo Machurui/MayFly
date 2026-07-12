@@ -27,12 +27,11 @@ public sealed class MongoOps(IProvisionerClient prov, ISecretProtector secrets, 
 
     public async Task<long> GetSizeBytesAsync(Instance inst, CancellationToken ct)
     {
-        var adminPwd = secrets.Unprotect(inst.AdminPasswordEnc);
         var command = $"var s=db.getSiblingDB('{inst.DbName}').stats(); print(s.storageSize + s.indexSize);";
-        var r = await prov.ExecMongoshAsync(inst.ContainerId,
-            new ExecMongoshRequest(command, inst.AdminUser, adminPwd, "admin", 10, 64 * 1024), ct);
+        var r = await ExecAdminAsync(inst, command, ct);
 
-        if (long.TryParse(r.Output.Trim(), out var n))
+        var token = r.Output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        if (long.TryParse(token, out var n))
             return n;
 
         log.LogWarning("GetSizeBytesAsync: could not parse size from output '{Output}'", r.Output);
@@ -41,13 +40,15 @@ public sealed class MongoOps(IProvisionerClient prov, ISecretProtector secrets, 
 
     public async Task SoftEnforceReadOnlyAsync(Instance inst, CancellationToken ct)
     {
-        var adminPwd = secrets.Unprotect(inst.AdminPasswordEnc);
         var command = $"db.getSiblingDB('{inst.DbName}').updateUser('{inst.DbUser}', {{roles:[{{role:'read', db:'{inst.DbName}'}}]}});";
-        var r = await prov.ExecMongoshAsync(inst.ContainerId,
-            new ExecMongoshRequest(command, inst.AdminUser, adminPwd, "admin", 10, 64 * 1024), ct);
+        var r = await ExecAdminAsync(inst, command, ct);
 
         if (r.ExitCode != 0)
             throw new InvalidOperationException(
                 $"SoftEnforceReadOnlyAsync failed (exit {r.ExitCode}): {r.Error}");
     }
+
+    private Task<ExecMongoshResult> ExecAdminAsync(Instance inst, string command, CancellationToken ct)
+        => prov.ExecMongoshAsync(inst.ContainerId,
+            new ExecMongoshRequest(command, inst.AdminUser, secrets.Unprotect(inst.AdminPasswordEnc), "admin", 10, 64 * 1024), ct);
 }

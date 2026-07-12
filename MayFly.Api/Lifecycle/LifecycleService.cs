@@ -118,7 +118,8 @@ public sealed class LifecycleService(
                 long? sizeBytes = null;
                 if (inst.Engine == "mongo")
                 {
-                    sizeBytes = await mongoOps.GetSizeBytesAsync(inst, ct);
+                    var raw = await mongoOps.GetSizeBytesAsync(inst, ct);
+                    if (raw > 0) sizeBytes = raw;
                 }
                 else
                 {
