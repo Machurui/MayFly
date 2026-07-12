@@ -133,6 +133,56 @@ describe('buildSnippets – mariadb', () => {
   })
 })
 
+const mongoInst = {
+  engine: 'mongo',
+  connectionString: 'mongodb://appuser:pw@localhost:27017/appdb',
+  publicPort: 27017, dbName: 'appdb', dbUser: 'appuser',
+} as InstanceDto
+
+describe('buildSnippets – mongo', () => {
+  const s = buildSnippets(mongoInst)
+  it('bash uses mongosh with the full URI', () => {
+    expect(s.bash).toContain('mongosh')
+    expect(s.bash).toContain('localhost')
+    expect(s.bash).toContain('27017')
+    expect(s.bash).toContain('appuser')
+    expect(s.bash).toContain('appdb')
+    expect(s.bash).toContain('pw')
+  })
+  it('python uses pymongo', () => {
+    expect(s.python).toContain('pymongo')
+    expect(s.python).toContain('localhost')
+    expect(s.python).toContain('27017')
+    expect(s.python).toContain('appuser')
+    expect(s.python).toContain('appdb')
+    expect(s.python).toContain('pw')
+  })
+  it('node uses mongodb driver', () => {
+    expect(s.node).toContain('mongodb')
+    expect(s.node).toContain('localhost')
+    expect(s.node).toContain('27017')
+    expect(s.node).toContain('appuser')
+    expect(s.node).toContain('appdb')
+    expect(s.node).toContain('pw')
+  })
+  it('go uses go.mongodb.org/mongo-driver', () => {
+    expect(s.go).toContain('go.mongodb.org/mongo-driver')
+    expect(s.go).toContain('localhost')
+    expect(s.go).toContain('27017')
+    expect(s.go).toContain('appuser')
+    expect(s.go).toContain('appdb')
+    expect(s.go).toContain('pw')
+  })
+  it('dotnet uses MongoDB.Driver', () => {
+    expect(s.dotnet).toContain('MongoDB.Driver')
+    expect(s.dotnet).toContain('localhost')
+    expect(s.dotnet).toContain('27017')
+    expect(s.dotnet).toContain('appuser')
+    expect(s.dotnet).toContain('appdb')
+    expect(s.dotnet).toContain('pw')
+  })
+})
+
 describe('buildSnippets – mssql', () => {
   it('parse does not throw on keyword connection string', () => {
     expect(() => buildSnippets(mssqlInst)).not.toThrow()

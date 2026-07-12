@@ -47,19 +47,19 @@ describe('EnginePicker', () => {
     expect(w.emitted('update:modelValue')?.[0]).toEqual(['mssql'])
   })
 
-  it('mongodb card is disabled and clicking it emits nothing', async () => {
+  it('clicking mongodb emits "mongo" (canonical backend id)', async () => {
     const w = mountPicker('postgres')
     const cards = w.findAll('.engine-card')
     const mongoCard = cards.find(c => c.text().includes('MongoDB'))!
-    expect(mongoCard.classes()).toContain('disabled')
+    expect(mongoCard.classes()).not.toContain('disabled')
     await mongoCard.trigger('click')
-    expect(w.emitted('update:modelValue')).toBeFalsy()
+    expect(w.emitted('update:modelValue')?.[0]).toEqual(['mongo'])
   })
 
-  it('mysql, mariadb and mssql cards are NOT disabled', () => {
+  it('mysql, mariadb, mssql and mongodb cards are NOT disabled', () => {
     const w = mountPicker('postgres')
     const cards = w.findAll('.engine-card')
-    for (const label of ['MySQL', 'MariaDB', 'SQL Server']) {
+    for (const label of ['MySQL', 'MariaDB', 'SQL Server', 'MongoDB']) {
       const card = cards.find(c => c.text().includes(label))!
       expect(card.classes()).not.toContain('disabled')
     }

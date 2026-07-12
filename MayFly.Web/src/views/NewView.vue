@@ -22,7 +22,7 @@ const engineMeta: Record<string, { driver: string; version: string }> = {
   postgres: { driver: 'postgresql', version: '17.5' },
   mysql:    { driver: 'mysql',      version: '8.4'  },
   mariadb:  { driver: 'mariadb',    version: '11.4' },
-  mongodb:  { driver: 'mongodb',    version: '7.0'  },
+  mongo:    { driver: 'mongodb',    version: '7.0'  },
   mssql:    { driver: 'mssql',      version: '22'   },
 }
 

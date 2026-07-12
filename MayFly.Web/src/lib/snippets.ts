@@ -138,8 +138,38 @@ Console.WriteLine(await cmd.ExecuteScalarAsync());`,
   }
 }
 
+function mongoSnippets(p: Parts): Record<'bash' | 'python' | 'node' | 'go' | 'dotnet', string> {
+  const uri = `mongodb://${p.user}:${p.pass}@${p.host}:${p.port}/${p.db}`
+  return {
+    bash: `mongosh "${uri}"`,
+    python: `from pymongo import MongoClient
+client = MongoClient("${uri}")
+db = client["${p.db}"]`,
+    node: `import { MongoClient } from 'mongodb'
+const client = new MongoClient("${uri}")
+await client.connect()
+const db = client.db("${p.db}")`,
+    go: `package main
+
+import (
+    "context"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+)
+
+func main() {
+    client, _ := mongo.Connect(context.TODO(), options.Client().ApplyURI("${uri}"))
+    defer client.Disconnect(context.TODO())
+}`,
+    dotnet: `using MongoDB.Driver;
+var client = new MongoClient("${uri}");
+var db = client.GetDatabase("${p.db}");`,
+  }
+}
+
 export function buildSnippets(inst: InstanceDto): Record<'bash' | 'python' | 'node' | 'go' | 'dotnet', string> {
   const p = parse(inst)
+  if (inst.engine === 'mongo') return mongoSnippets(p)
   if (inst.engine === 'mysql' || inst.engine === 'mariadb') return mysqlSnippets(p)
   if (inst.engine === 'mssql') return mssqlSnippets(p)
   return postgresSnippets(p)

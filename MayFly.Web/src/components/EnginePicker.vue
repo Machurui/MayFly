@@ -5,7 +5,7 @@ const engines = [
   { id: 'postgres', label: 'PostgreSQL', glyph: 'PG', version: '17.5', port: 5432, driver: 'postgresql', color: '#4ade80', enabled: true },
   { id: 'mysql',    label: 'MySQL',      glyph: 'MY', version: '8.4',  port: 3306, driver: 'mysql',      color: '#60a5fa', enabled: true },
   { id: 'mariadb',  label: 'MariaDB',    glyph: 'MB', version: '11.4', port: 3306, driver: 'mariadb',    color: '#f59e0b', enabled: true },
-  { id: 'mongodb',  label: 'MongoDB',    glyph: 'MG', version: '7.0',  port: 27017,driver: 'mongodb',    color: '#22c55e', enabled: false },
+  { id: 'mongo',    label: 'MongoDB',    glyph: 'MG', version: '7.0',  port: 27017,driver: 'mongodb',    color: '#22c55e', enabled: true  },
   { id: 'mssql',    label: 'SQL Server', glyph: 'SS', version: '22',   port: 1433, driver: 'mssql',      color: '#e11d48', enabled: true },
 ]
 </script>

@@ -2,6 +2,7 @@ export const engineLabels: Record<string, string> = {
   postgres: 'PostgreSQL',
   mysql:    'MySQL',
   mariadb:  'MariaDB',
+  mongo:    'MongoDB',
   mssql:    'SQL Server',
 }
 
