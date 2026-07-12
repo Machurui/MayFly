@@ -127,6 +127,18 @@ test_engine() {
     return
   fi
 
+  # For mongo, validate connectionString scheme
+  if [[ "$engine" == "mongo" ]]; then
+    local conn_string
+    conn_string=$(echo "$create_body" | python3 -c \
+      "import sys,json; print(json.load(sys.stdin).get('connectionString',''))" 2>/dev/null || echo "")
+    if [[ ! "$conn_string" =~ ^mongodb:// ]]; then
+      check_fail "${label} A: connectionString does not start with 'mongodb://' (got: $conn_string)"
+      return
+    fi
+    echo "  connectionString scheme validated: mongodb://"
+  fi
+
   # --- B: Egress probe (engine-agnostic, best-effort) ---
   echo ""
   echo "${label} B: Egress probe (best-effort — hard proof is in integration tests)"
@@ -193,7 +205,7 @@ test_engine() {
     q_output=$(echo "$query_body" | python3 -c \
       "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
     echo "  success=$q_success  output=$q_output"
-    if [[ "$q_success" == "True" ]] && echo "$q_output" | grep -q "$expect_substr"; then
+    if [[ "$q_success" == "True" ]] && echo "$q_output" | grep -qF "$expect_substr"; then
       check_pass "${label} C: query → success:true, output contains '$expect_substr'"
     else
       check_fail "${label} C: query → failed (success=$q_success, output='$q_output', expected to contain '$expect_substr')"
@@ -339,7 +351,7 @@ test_engine mariadb   256  blank      "SELECT 1"                        success
 test_engine mssql     1024 blank      "SELECT 1"                        success
 
 # mongo: blank — verify mongosh JS exec (insert + count; response uses output field, not rows)
-test_engine mongo     256  blank      "db.getCollection('t').insertOne({x:1}); print(db.getCollection('t').countDocuments())"  "output:1"
+test_engine mongo     256  blank      "db.getCollection('t').insertOne({x:1}); print(\"COUNT=\"+db.getCollection('t').countDocuments())"  "output:COUNT=1"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

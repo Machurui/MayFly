@@ -280,6 +280,13 @@ USE [master];
 ALTER DATABASE [appdb] SET READ_ONLY WITH ROLLBACK IMMEDIATE;
 ```
 
+For **MongoDB**:
+Size is measured by querying the database stats via mongosh (`db.getSiblingDB('appdb').stats()`, combining `storageSize` and `indexSize`). When size meets or exceeds `StorageQuotaMb`, the enforcer connects as `mayflyadmin` (admin credential) and revokes the app user's `readWrite` role down to `read` on `appdb`:
+```javascript
+db.getSiblingDB('appdb').updateUser('appuser', {roles:[{role:'read', db:'appdb'}]})
+```
+Both operations run through the provisioner exec channel (see §4.4), effective on new connections to the instance.
+
 In all cases, the effect applies to new connections; existing sessions
 may complete in-flight transactions before the read-only flag takes hold.
 The bounded overshoot between two lifecycle ticks (≤ 30 s) is the
