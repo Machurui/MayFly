@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Docker.DotNet.Models;
+using MayFly.Provisioner.Seeding;
 
 namespace MayFly.Provisioner.Engines;
 
@@ -36,7 +37,12 @@ public sealed class MongoEngineProvider : IEngineProvider
             $"  roles: [{{ role: 'readWrite', db: '{c.Db}' }}]\n" +
             $"}});";
 
-        return new EngineSetup(new[] { ("00-roles.js", js) }, PostReadyExec: null);
+        var scripts = new List<(string, string)> { ("00-roles.js", js) };
+
+        if (SeedCatalog.IsTemplate(initialData))
+            scripts.Add(("01-seed.js", SeedCatalog.GetMongoJs(initialData)));
+
+        return new EngineSetup(scripts, PostReadyExec: null);
     }
 
     /// <summary>

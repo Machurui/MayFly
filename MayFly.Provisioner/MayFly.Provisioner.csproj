@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Seeding/northwind.sql" />
+    <EmbeddedResource Include="Seeding/northwind.mongo.js" />
   </ItemGroup>
 
 </Project>
