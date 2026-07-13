@@ -46,7 +46,7 @@ public class SeedTemplateMongoTests
                 $"mongodb://{res.DbUser}:{res.DbPassword}@localhost:{res.PublicPort}/{res.DbName}" +
                 $"?authSource={res.DbName}";
 
-            await WaitForMongoAsync(connectionString);
+            await WaitForMongoAsync(connectionString, res.DbName);
 
             var client = new MongoClient(connectionString);
             var db = client.GetDatabase(res.DbName);
@@ -63,7 +63,7 @@ public class SeedTemplateMongoTests
         }
     }
 
-    private static async Task WaitForMongoAsync(string connectionString)
+    private static async Task WaitForMongoAsync(string connectionString, string dbName)
     {
         Exception? lastEx = null;
         for (int i = 0; i < 90; i++)
@@ -72,7 +72,7 @@ public class SeedTemplateMongoTests
             {
                 var client = new MongoClient(
                     MongoClientSettings.FromConnectionString(connectionString));
-                var db = client.GetDatabase("appdb");
+                var db = client.GetDatabase(dbName);
                 await db.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
                 return;
             }
