@@ -31,14 +31,16 @@ public class SeedTemplateMongoTests
             NullLogger<DockerProvisioner>.Instance);
     }
 
-    [Fact(Timeout = 120_000)]
-    public async Task Northwind_seeds_mongo_readable_by_appuser()
+    [Theory(Timeout = 120_000)]
+    [InlineData("northwind", "products")]
+    [InlineData("ecommerce", "products")]
+    public async Task Template_seeds_mongo_collection_readable_by_appuser(string template, string collection)
     {
         await CleanLeakedContainersAsync();
 
         var sut = NewSut();
         var res = await sut.CreateAsync(
-            new CreateInstanceRequest("mongo", 3, 256, "northwind"), default);
+            new CreateInstanceRequest("mongo", 3, 256, template), default);
 
         try
         {
@@ -52,10 +54,11 @@ public class SeedTemplateMongoTests
             var db = client.GetDatabase(res.DbName);
 
             var count = await db
-                .GetCollection<BsonDocument>("products")
+                .GetCollection<BsonDocument>(collection)
                 .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty);
 
-            count.Should().BeGreaterThan(0, "northwind seed must have populated the products collection");
+            count.Should().BeGreaterThan(0,
+                $"seed '{template}' must have populated the '{collection}' collection");
         }
         finally
         {

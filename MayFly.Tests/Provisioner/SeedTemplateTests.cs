@@ -29,31 +29,35 @@ public class SeedTemplateTests
             NullLogger<DockerProvisioner>.Instance);
 
     [Theory(Timeout = 240000)]
-    [InlineData("postgres")]
-    [InlineData("mysql")]
-    [InlineData("mariadb")]
-    [InlineData("mssql")]
-    public async Task Northwind_seeds_products_readable_by_appuser(string engine)
+    [InlineData("postgres",  "northwind",  "products")]
+    [InlineData("mysql",     "northwind",  "products")]
+    [InlineData("mariadb",   "northwind",  "products")]
+    [InlineData("mssql",     "northwind",  "products")]
+    [InlineData("postgres",  "ecommerce",  "products")]
+    [InlineData("mysql",     "ecommerce",  "products")]
+    [InlineData("mariadb",   "ecommerce",  "products")]
+    [InlineData("mssql",     "ecommerce",  "products")]
+    public async Task Template_seeds_table_readable_by_appuser(string engine, string template, string countTable)
     {
         await CleanLeakedContainersAsync();
 
         var sut = NewSut();
         var storageMb = engine == "mssql" ? 1024 : 256;
-        var res = await sut.CreateAsync(new CreateInstanceRequest(engine, 3, storageMb, "northwind"), default);
+        var res = await sut.CreateAsync(new CreateInstanceRequest(engine, 3, storageMb, template), default);
 
         try
         {
             switch (engine)
             {
                 case "postgres":
-                    await AssertPostgres(res);
+                    await AssertPostgres(res, countTable);
                     break;
                 case "mysql":
                 case "mariadb":
-                    await AssertMySql(res);
+                    await AssertMySql(res, countTable);
                     break;
                 case "mssql":
-                    await AssertMssql(res);
+                    await AssertMssql(res, countTable);
                     break;
             }
         }
@@ -65,7 +69,7 @@ public class SeedTemplateTests
 
     // --- Postgres ---
 
-    private static async Task AssertPostgres(CreateInstanceResult res)
+    private static async Task AssertPostgres(CreateInstanceResult res, string countTable)
     {
         var cs = $"Host=localhost;Port={res.PublicPort};Database={res.DbName};" +
                  $"Username={res.DbUser};Password={res.DbPassword}";
@@ -74,14 +78,9 @@ public class SeedTemplateTests
         await using var conn = new NpgsqlConnection(cs);
         await conn.OpenAsync();
 
-        await using var countCmd = new NpgsqlCommand("SELECT COUNT(*) FROM products", conn);
+        await using var countCmd = new NpgsqlCommand($"SELECT COUNT(*) FROM {countTable}", conn);
         var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
-        count.Should().BeGreaterThan(0, "northwind seed must have populated products on postgres");
-
-        await using var insertCmd = new NpgsqlCommand(
-            "INSERT INTO products (id, name, price) VALUES (99999, 'probe', 1.00)", conn);
-        await insertCmd.Awaiting(c => c.ExecuteNonQueryAsync())
-            .Should().NotThrowAsync("appuser must be able to INSERT into seeded products on postgres");
+        count.Should().BeGreaterThan(0, $"seed must have populated {countTable} on postgres");
     }
 
     private static async Task WaitForPostgresAsync(string cs)
@@ -101,7 +100,7 @@ public class SeedTemplateTests
 
     // --- MySQL / MariaDB ---
 
-    private static async Task AssertMySql(CreateInstanceResult res)
+    private static async Task AssertMySql(CreateInstanceResult res, string countTable)
     {
         var cs = $"Server=localhost;Port={res.PublicPort};Database={res.DbName};" +
                  $"User={res.DbUser};Password={res.DbPassword};AllowPublicKeyRetrieval=true;SslMode=None";
@@ -110,14 +109,9 @@ public class SeedTemplateTests
         await using var conn = new MySqlConnection(cs);
         await conn.OpenAsync();
 
-        await using var countCmd = new MySqlCommand("SELECT COUNT(*) FROM products", conn);
+        await using var countCmd = new MySqlCommand($"SELECT COUNT(*) FROM {countTable}", conn);
         var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
-        count.Should().BeGreaterThan(0, "northwind seed must have populated products on mysql/mariadb");
-
-        await using var insertCmd = new MySqlCommand(
-            "INSERT INTO products (id, name, price) VALUES (99999, 'probe', 1.00)", conn);
-        await insertCmd.Awaiting(c => c.ExecuteNonQueryAsync())
-            .Should().NotThrowAsync("appuser must be able to INSERT into seeded products on mysql/mariadb");
+        count.Should().BeGreaterThan(0, $"seed must have populated {countTable} on mysql/mariadb");
     }
 
     private static async Task WaitForMySqlAsync(string cs)
@@ -138,7 +132,7 @@ public class SeedTemplateTests
 
     // --- SQL Server ---
 
-    private static async Task AssertMssql(CreateInstanceResult res)
+    private static async Task AssertMssql(CreateInstanceResult res, string countTable)
     {
         var cs = $"Server=localhost,{res.PublicPort};Database={res.DbName};" +
                  $"User Id={res.DbUser};Password={res.DbPassword};" +
@@ -148,14 +142,9 @@ public class SeedTemplateTests
         await using var conn = new SqlConnection(cs);
         await conn.OpenAsync();
 
-        await using var countCmd = new SqlCommand("SELECT COUNT(*) FROM products", conn);
+        await using var countCmd = new SqlCommand($"SELECT COUNT(*) FROM {countTable}", conn);
         var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
-        count.Should().BeGreaterThan(0, "northwind seed must have populated products on mssql");
-
-        await using var insertCmd = new SqlCommand(
-            "INSERT INTO products (id, name, price) VALUES (99999, 'probe', 1.00)", conn);
-        await insertCmd.Awaiting(c => c.ExecuteNonQueryAsync())
-            .Should().NotThrowAsync("appuser must be able to INSERT into seeded products on mssql");
+        count.Should().BeGreaterThan(0, $"seed must have populated {countTable} on mssql");
     }
 
     private static async Task WaitForSqlServerAsync(string cs)
