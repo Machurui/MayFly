@@ -10,7 +10,7 @@ namespace MayFly.Provisioner.Seeding;
 public static class SeedCatalog
 {
     public static readonly IReadOnlySet<string> Templates =
-        new HashSet<string> { "northwind", "ecommerce", "blog" };
+        new HashSet<string> { "northwind", "ecommerce", "blog", "iot" };
 
     public static bool IsTemplate(string initialData) => Templates.Contains(initialData);
 

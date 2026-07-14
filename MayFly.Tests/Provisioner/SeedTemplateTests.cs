@@ -41,6 +41,10 @@ public class SeedTemplateTests
     [InlineData("mysql",     "blog",       "posts")]
     [InlineData("mariadb",   "blog",       "posts")]
     [InlineData("mssql",     "blog",       "posts")]
+    [InlineData("postgres",  "iot",        "sensor_readings")]
+    [InlineData("mysql",     "iot",        "sensor_readings")]
+    [InlineData("mariadb",   "iot",        "sensor_readings")]
+    [InlineData("mssql",     "iot",        "sensor_readings")]
     public async Task Template_seeds_table_readable_by_appuser(string engine, string template, string countTable)
     {
         await CleanLeakedContainersAsync();

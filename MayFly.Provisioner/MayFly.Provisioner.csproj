@@ -20,6 +20,8 @@
     <EmbeddedResource Include="Seeding/ecommerce.mongo.js" />
     <EmbeddedResource Include="Seeding/blog.sql" />
     <EmbeddedResource Include="Seeding/blog.mongo.js" />
+    <EmbeddedResource Include="Seeding/iot.sql" />
+    <EmbeddedResource Include="Seeding/iot.mongo.js" />
   </ItemGroup>
 
 </Project>
