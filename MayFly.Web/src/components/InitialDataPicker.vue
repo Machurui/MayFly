@@ -15,13 +15,16 @@ const seeds = [
 
 function isEnabled(seed: typeof seeds[number]): boolean {
   if (seed.alwaysEnabled) return true
-  if (seed.id === 'northwind') return props.engine === 'postgres'
-  return false
+  if (seed.id === 'dump') return false
+  // northwind / ecommerce / blog / iot are enabled on all engines
+  return true
 }
 
-// Reset to 'blank' if the currently-selected option becomes disabled due to an engine change
+// Reset to 'blank' if the currently-selected option becomes disabled due to an engine change.
+// With all four templates enabled on every engine this never fires for templates — harmless.
 watch(() => props.engine, () => {
-  if (model.value === 'northwind' && props.engine !== 'postgres') {
+  const current = seeds.find(s => s.id === model.value)
+  if (current && !isEnabled(current)) {
     model.value = 'blank'
   }
 })

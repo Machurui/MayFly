@@ -173,12 +173,15 @@ test_engine() {
   # --- C: Query ---
   echo ""
   echo "${label} C: POST /api/instances/$token/query  query=\"$query\""
+  # Build JSON via Python so any quotes/special chars in $query are properly escaped.
+  local query_json
+  query_json=$(python3 -c "import json,sys; print(json.dumps({'query': sys.argv[1]}))" "$query")
   local query_resp query_status query_body
   query_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
     -w "\n__STATUS__:%{http_code}" --max-time 30 \
     -X POST "http://localhost/api/instances/$token/query" \
     -H 'Content-Type: application/json' \
-    -d "{\"query\":\"${query}\"}" \
+    -d "$query_json" \
     2>/dev/null || echo "__STATUS__:000")
   query_status=$(echo "$query_resp" | grep '__STATUS__:' | cut -d: -f2)
   query_body=$(echo "$query_resp" | grep -v '__STATUS__:')
@@ -352,6 +355,13 @@ test_engine mssql     1024 blank      "SELECT 1"                        success
 
 # mongo: blank — verify mongosh JS exec (insert + count; response uses output field, not rows)
 test_engine mongo     256  blank      "db.getCollection('t').insertOne({x:1}); print(\"COUNT=\"+db.getCollection('t').countDocuments())"  "output:COUNT=1"
+
+# ── Seeded-template checks (one SQL engine, one NoSQL engine) ─────────────────
+# postgres + blog: verify posts table was seeded (5 rows expected → count > 0)
+test_engine postgres  256  blog       "SELECT COUNT(*) FROM posts"  count
+
+# mongo + blog: verify posts collection was seeded (5 docs expected)
+test_engine mongo     256  blog       "print(\"POSTS=\"+db.getCollection('posts').countDocuments())"  "output:POSTS=5"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
