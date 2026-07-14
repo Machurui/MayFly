@@ -18,6 +18,8 @@
     <EmbeddedResource Include="Seeding/northwind.mongo.js" />
     <EmbeddedResource Include="Seeding/ecommerce.sql" />
     <EmbeddedResource Include="Seeding/ecommerce.mongo.js" />
+    <EmbeddedResource Include="Seeding/blog.sql" />
+    <EmbeddedResource Include="Seeding/blog.mongo.js" />
   </ItemGroup>
 
 </Project>

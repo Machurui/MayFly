@@ -7,7 +7,7 @@ public static class InstanceSpecValidator
     private static readonly HashSet<string> Engines = new() { "postgres", "mysql", "mariadb", "mssql", "mongo" };
     private static readonly HashSet<int> Ttls = new() { 3, 6, 12 };
     private static readonly HashSet<int> Storage = new() { 256, 512, 1024, 2048 };
-    private static readonly HashSet<string> InitialData = new() { "blank", "northwind", "ecommerce" };
+    private static readonly HashSet<string> InitialData = new() { "blank", "northwind", "ecommerce", "blog" };
 
     public static (bool Ok, string? Error) Validate(CreateInstanceRequest r)
     {

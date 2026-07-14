@@ -34,6 +34,7 @@ public class SeedTemplateMongoTests
     [Theory(Timeout = 120_000)]
     [InlineData("northwind", "products")]
     [InlineData("ecommerce", "products")]
+    [InlineData("blog",      "posts")]
     public async Task Template_seeds_mongo_collection_readable_by_appuser(string template, string collection)
     {
         await CleanLeakedContainersAsync();
