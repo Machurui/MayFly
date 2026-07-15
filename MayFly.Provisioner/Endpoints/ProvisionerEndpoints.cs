@@ -48,5 +48,9 @@ public static class ProvisionerEndpoints
         app.MapPost("/instances/{containerId}/exec-mongosh",
             async (string containerId, ExecMongoshRequest req, IDockerProvisioner p, CancellationToken ct)
                 => Results.Ok(await p.ExecMongoshAsync(containerId, req, ct)));
+
+        app.MapPost("/instances/{containerId}/exec-dump",
+            async (string containerId, ExecDumpRequest req, IDockerProvisioner p, CancellationToken ct)
+                => Results.Ok(await p.ExecDumpAsync(containerId, req, ct)));
     }
 }

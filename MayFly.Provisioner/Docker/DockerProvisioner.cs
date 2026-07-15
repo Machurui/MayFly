@@ -509,6 +509,92 @@ public sealed class DockerProvisioner : IDockerProvisioner
     }
 
     // -------------------------------------------------------------------------
+    // ExecDumpAsync
+    // -------------------------------------------------------------------------
+
+    public async Task<ExecDumpResult> ExecDumpAsync(
+        string containerId, ExecDumpRequest req, CancellationToken ct)
+    {
+        // Validate identifiers before interpolating into the shell command.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(req.AdminUser, "^[A-Za-z0-9_]+$"))
+            throw new ArgumentException("invalid adminUser", nameof(req));
+        if (!System.Text.RegularExpressions.Regex.IsMatch(req.Db, "^[A-Za-z0-9_]+$"))
+            throw new ArgumentException("invalid db", nameof(req));
+
+        var secs = Math.Clamp(req.TimeoutSeconds, 1, 120);
+        var ext = req.Engine == "mongo" ? "js" : "sql";
+
+        // Deliver the dump content to /tmp/dump.<ext> inside the container.
+        //
+        // ExtractArchiveToContainerAsync would be the natural choice here, but it is rejected by
+        // Docker when the container has ReadonlyRootfs=true — even though /tmp is a writable tmpfs
+        // in all MayFly engine containers. Docker's archive API does a rootfs-level check before
+        // inspecting the individual mount.
+        //
+        // Instead we write the file via an exec: base64-encode the dump content, pass it as the
+        // DUMP_B64 env var (base64 is pure ASCII — safe in an env entry), then inside the container
+        // run `echo "$DUMP_B64" | base64 -d > /tmp/dump.<ext>`. base64(1) is available in every
+        // engine image (BusyBox on alpine, GNU coreutils on Debian/Ubuntu).
+        // The dump content is never interpolated into the shell string.
+        var dumpB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(req.DumpContent));
+        var writeCmd = new List<string> { "sh", "-c", $"echo \"$DUMP_B64\" | base64 -d > /tmp/dump.{ext}" };
+        var writeEnv = new List<string> { $"DUMP_B64={dumpB64}" };
+        var (writeExit, _, writeErr, _) = await ExecCaptureAsync(containerId, writeCmd, writeEnv, 4096, ct);
+        if (writeExit != 0)
+            throw new InvalidOperationException($"Failed to write dump to /tmp in container: {writeErr}");
+
+        // Build the engine-specific client command. The admin password rides an env var so it
+        // is never visible on the process argv. All commands are wrapped with `timeout {secs}`
+        // so the engine client cannot run forever even if the outer CTS misbehaves.
+        string sh;
+        List<string> env;
+        switch (req.Engine)
+        {
+            case "postgres":
+                sh = $"timeout {secs} psql -h 127.0.0.1 -U {req.AdminUser} -d {req.Db}" +
+                     $" -v ON_ERROR_STOP=1 -f /tmp/dump.sql";
+                env = new List<string> { $"PGPASSWORD={req.AdminPassword}" };
+                break;
+            case "mysql":
+                sh = $"timeout {secs} mysql -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
+                env = new List<string> { $"MYSQL_PWD={req.AdminPassword}" };
+                break;
+            case "mariadb":
+                // mariadb:11.4 renamed the CLI from `mysql` to `mariadb`; MYSQL_PWD is still honoured.
+                sh = $"timeout {secs} mariadb -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
+                env = new List<string> { $"MYSQL_PWD={req.AdminPassword}" };
+                break;
+            case "mssql":
+                sh = $"timeout {secs} /opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1" +
+                     $" -U {req.AdminUser} -d {req.Db} -b -i /tmp/dump.sql";
+                env = new List<string> { $"SQLCMDPASSWORD={req.AdminPassword}" };
+                break;
+            case "mongo":
+                // Password via MONGO_PWD env; referenced from double-quoted $MONGO_PWD expansion
+                // inside `sh -c` — no argv exposure, same pattern as ExecMongoshAsync.
+                sh = $"timeout {secs} mongosh --quiet --host 127.0.0.1 -u {req.AdminUser}" +
+                     $" -p \"$MONGO_PWD\" --authenticationDatabase admin {req.Db} --file /tmp/dump.js";
+                env = new List<string> { $"MONGO_PWD={req.AdminPassword}" };
+                break;
+            default:
+                throw new ArgumentException($"unsupported engine '{req.Engine}'", nameof(req));
+        }
+
+        var cmd = new List<string> { "sh", "-c", sh };
+
+        // Outer safety CTS: cancels after TimeoutSeconds + 5 s so the API call can never hang
+        // even if the container-side `timeout` misbehaves.
+        using var outerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        outerCts.CancelAfter(TimeSpan.FromSeconds(secs + 5));
+
+        var maxBytes = Math.Clamp(req.MaxOutputBytes, 1, 1024 * 1024);
+        var sw = Stopwatch.StartNew();
+        var (exit, outStr, errStr, truncated) =
+            await ExecCaptureAsync(containerId, cmd, env, maxBytes, outerCts.Token);
+        return new ExecDumpResult(outStr, errStr, exit, truncated, (int)sw.ElapsedMilliseconds);
+    }
+
+    // -------------------------------------------------------------------------
     // Shared exec helper
     // -------------------------------------------------------------------------
 

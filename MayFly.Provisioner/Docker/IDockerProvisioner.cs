@@ -10,4 +10,5 @@ public interface IDockerProvisioner
     Task DestroyByInstanceAsync(string instanceId, CancellationToken ct);
     Task SweepOrphansAsync(IReadOnlyCollection<string> activeVolumeNames, CancellationToken ct);
     Task<ExecMongoshResult> ExecMongoshAsync(string containerId, ExecMongoshRequest req, CancellationToken ct);
+    Task<ExecDumpResult> ExecDumpAsync(string containerId, ExecDumpRequest req, CancellationToken ct);
 }
