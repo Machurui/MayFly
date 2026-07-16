@@ -42,6 +42,9 @@ watch(() => props.engine, () => {
     model.value = 'blank'
   }
 })
+
+// Clear file-size error when model (seed) changes.
+watch(model, () => { fileSizeError.value = '' })
 </script>
 
 <template>

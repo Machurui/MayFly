@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { createInstance, importDump } from '../api/instances'
 import type { ImportResultDto } from '../api/types'
@@ -45,6 +45,9 @@ const summary = computed(() => {
 const canCreate = computed(() =>
   !busy.value && !(initialData.value === 'dump' && !dumpFile.value)
 )
+
+// Clear dump file when leaving 'dump' selection.
+watch(initialData, (v) => { if (v !== 'dump') dumpFile.value = null })
 
 async function create() {
   busy.value = true

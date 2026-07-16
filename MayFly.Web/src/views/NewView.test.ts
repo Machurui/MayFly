@@ -99,4 +99,28 @@ describe('NewView', () => {
     expect(push).not.toHaveBeenCalled()
     expect(w.text()).toMatch(/syntax error/i)
   })
+
+  it('with dump + file: handles importDump rejection and surfaces error', async () => {
+    createInstance.mockResolvedValue({ token: 'tok999' })
+    importDump.mockRejectedValue({ message: 'Network timeout' })
+
+    const w = mount(NewView, { global: { plugins: [VueQueryPlugin] } })
+
+    const opts = w.findAll('.opt')
+    const dumpCard = opts.find(o => o.text().includes('Import dump'))!
+    await dumpCard.trigger('click')
+    await nextTick()
+
+    const file = new File(['INSERT INTO foo VALUES (1)'], 'dump.sql')
+    const input = w.find('input[type="file"]').element as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await w.find('input[type="file"]').trigger('change')
+    await nextTick()
+
+    await w.find('[data-test="create"]').trigger('click')
+    await flushPromises()
+
+    expect(push).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Network timeout')
+  })
 })
