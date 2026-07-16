@@ -524,63 +524,57 @@ public sealed class DockerProvisioner : IDockerProvisioner
         var secs = Math.Clamp(req.TimeoutSeconds, 1, 120);
         var ext = req.Engine == "mongo" ? "js" : "sql";
 
-        // Deliver the dump content to /tmp/dump.<ext> inside the container.
+        // Resolve the engine-specific client command BEFORE opening an exec connection,
+        // so an unknown engine throws up front without touching the container.
         //
-        // ExtractArchiveToContainerAsync would be the natural choice here, but it is rejected by
-        // Docker when the container has ReadonlyRootfs=true — even though /tmp is a writable tmpfs
-        // in all MayFly engine containers. Docker's archive API does a rootfs-level check before
-        // inspecting the individual mount.
-        //
-        // Instead we write the file via an exec: base64-encode the dump content, pass it as the
-        // DUMP_B64 env var (base64 is pure ASCII — safe in an env entry), then inside the container
-        // run `echo "$DUMP_B64" | base64 -d > /tmp/dump.<ext>`. base64(1) is available in every
-        // engine image (BusyBox on alpine, GNU coreutils on Debian/Ubuntu).
-        // The dump content is never interpolated into the shell string.
-        var dumpB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(req.DumpContent));
-        var writeCmd = new List<string> { "sh", "-c", $"echo \"$DUMP_B64\" | base64 -d > /tmp/dump.{ext}" };
-        var writeEnv = new List<string> { $"DUMP_B64={dumpB64}" };
-        var (writeExit, _, writeErr, _) = await ExecCaptureAsync(containerId, writeCmd, writeEnv, 4096, ct);
-        if (writeExit != 0)
-            throw new InvalidOperationException($"Failed to write dump to /tmp in container: {writeErr}");
-
-        // Build the engine-specific client command. The admin password rides an env var so it
-        // is never visible on the process argv. All commands are wrapped with `timeout {secs}`
-        // so the engine client cannot run forever even if the outer CTS misbehaves.
-        string sh;
+        // Dump delivery: raw bytes are piped via exec stdin → `cat` → /tmp/dump.<ext>.
+        // This replaces the previous base64-via-env approach which was capped at
+        // MAX_ARG_STRLEN ≈ 128 KiB per env entry (effective raw limit ~96 KiB).
+        // The stdin pipe has no per-string size limit and supports dumps up to 16 MiB+.
+        // The dump content is NEVER shell-interpolated: `cat` reads raw bytes from the
+        // exec's stdin channel. Passwords still ride env vars; identifiers are validated.
+        string clientSh;
         List<string> env;
         switch (req.Engine)
         {
             case "postgres":
-                sh = $"timeout {secs} psql -h 127.0.0.1 -U {req.AdminUser} -d {req.Db}" +
-                     $" -v ON_ERROR_STOP=1 -f /tmp/dump.sql";
+                clientSh = $"timeout {secs} psql -h 127.0.0.1 -U {req.AdminUser} -d {req.Db}" +
+                           $" -v ON_ERROR_STOP=1 -f /tmp/dump.sql";
                 env = new List<string> { $"PGPASSWORD={req.AdminPassword}" };
                 break;
             case "mysql":
-                sh = $"timeout {secs} mysql -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
+                clientSh = $"timeout {secs} mysql -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
                 env = new List<string> { $"MYSQL_PWD={req.AdminPassword}" };
                 break;
             case "mariadb":
                 // mariadb:11.4 renamed the CLI from `mysql` to `mariadb`; MYSQL_PWD is still honoured.
-                sh = $"timeout {secs} mariadb -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
+                clientSh = $"timeout {secs} mariadb -h 127.0.0.1 -u {req.AdminUser} {req.Db} < /tmp/dump.sql";
                 env = new List<string> { $"MYSQL_PWD={req.AdminPassword}" };
                 break;
             case "mssql":
-                sh = $"timeout {secs} /opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1" +
-                     $" -U {req.AdminUser} -d {req.Db} -b -i /tmp/dump.sql";
+                clientSh = $"timeout {secs} /opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1" +
+                           $" -U {req.AdminUser} -d {req.Db} -b -i /tmp/dump.sql";
                 env = new List<string> { $"SQLCMDPASSWORD={req.AdminPassword}" };
                 break;
             case "mongo":
                 // Password via MONGO_PWD env; referenced from double-quoted $MONGO_PWD expansion
                 // inside `sh -c` — no argv exposure, same pattern as ExecMongoshAsync.
-                sh = $"timeout {secs} mongosh --quiet --host 127.0.0.1 -u {req.AdminUser}" +
-                     $" -p \"$MONGO_PWD\" --authenticationDatabase admin {req.Db} --file /tmp/dump.js";
+                clientSh = $"timeout {secs} mongosh --quiet --host 127.0.0.1 -u {req.AdminUser}" +
+                           $" -p \"$MONGO_PWD\" --authenticationDatabase admin {req.Db} --file /tmp/dump.js";
                 env = new List<string> { $"MONGO_PWD={req.AdminPassword}" };
                 break;
             default:
                 throw new ArgumentException($"unsupported engine '{req.Engine}'", nameof(req));
         }
 
+        // Single exec: cat reads raw dump bytes from stdin → file, then runs the native client.
+        // Using a combined sh -c avoids a second exec round-trip and keeps the file in scope
+        // for the immediately following client invocation.
+        var sh = $"cat > /tmp/dump.{ext} && {clientSh}";
         var cmd = new List<string> { "sh", "-c", sh };
+
+        // Raw dump bytes delivered over exec stdin — binary-safe, no size limit.
+        var stdinBytes = Encoding.UTF8.GetBytes(req.DumpContent);
 
         // Outer safety CTS: cancels after TimeoutSeconds + 5 s so the API call can never hang
         // even if the container-side `timeout` misbehaves.
@@ -590,7 +584,7 @@ public sealed class DockerProvisioner : IDockerProvisioner
         var maxBytes = Math.Clamp(req.MaxOutputBytes, 1, 1024 * 1024);
         var sw = Stopwatch.StartNew();
         var (exit, outStr, errStr, truncated) =
-            await ExecCaptureAsync(containerId, cmd, env, maxBytes, outerCts.Token);
+            await ExecCaptureAsync(containerId, cmd, env, maxBytes, outerCts.Token, stdin: stdinBytes);
         return new ExecDumpResult(outStr, errStr, exit, truncated, (int)sw.ElapsedMilliseconds);
     }
 
@@ -603,15 +597,24 @@ public sealed class DockerProvisioner : IDockerProvisioner
     /// is capped at <paramref name="maxBytes"/> individually. A <see cref="CappedStream"/> discards bytes
     /// beyond the cap during streaming so that a runaway <c>print</c> loop cannot OOM the
     /// Provisioner process. Returns the exit code, captured strings, and a truncation flag.
+    /// <para>
+    /// When <paramref name="stdin"/> is non-null the exec is created with <c>AttachStdin = true</c>
+    /// and the bytes are written to the exec's stdin channel concurrently with draining
+    /// stdout/stderr, after which <c>CloseWrite()</c> signals EOF to the in-container process.
+    /// There is no kernel-imposed size limit on the stdin pipe (unlike env-var delivery which is
+    /// capped at <c>MAX_ARG_STRLEN ≈ 128 KiB</c>), making this suitable for large payloads.
+    /// </para>
     /// </summary>
     private async Task<(int exit, string stdout, string stderr, bool truncated)> ExecCaptureAsync(
-        string containerId, IList<string> cmd, IList<string>? env, int maxBytes, CancellationToken ct)
+        string containerId, IList<string> cmd, IList<string>? env, int maxBytes, CancellationToken ct,
+        byte[]? stdin = null)
     {
         var execParams = new ContainerExecCreateParameters
         {
             Cmd = new List<string>(cmd),
             AttachStdout = true,
-            AttachStderr = true
+            AttachStderr = true,
+            AttachStdin = stdin is not null
         };
         if (env is not null) execParams.Env = new List<string>(env);
         var execCreate = await _docker.Exec.CreateContainerExecAsync(containerId, execParams, ct);
@@ -621,12 +624,42 @@ public sealed class DockerProvisioner : IDockerProvisioner
             new ContainerExecStartParameters { Detach = false },
             ct);
 
+        // Feed stdin concurrently while draining stdout/stderr.
+        // CopyOutputToAsync blocks until the process exits, so stdin must be written
+        // on a separate task to avoid a deadlock if the process waits for stdin before
+        // it produces any output (or if internal pipe buffers fill up before EOF).
+        // Exceptions from the stdin writer are suppressed: any truncated write is
+        // reflected in a non-zero exit code captured below.
+        Task stdinTask = Task.CompletedTask;
+        if (stdin is not null)
+        {
+            stdinTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await execStream.WriteAsync(stdin, 0, stdin.Length, ct);
+                    // Signal EOF so the in-container process sees end-of-input.
+                    // CloseWrite() half-closes the stdin channel without tearing down the
+                    // stdout/stderr read side; CopyOutputToAsync continues to drain normally.
+                    execStream.CloseWrite();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // Broken-pipe / cancellation during write: the process side already
+                    // closed stdin (e.g. syntax error on first line). The exit code will
+                    // be non-zero; no further action needed here.
+                }
+            }, CancellationToken.None);  // don't cancel mid-write; let the process finish
+        }
+
         // Each of stdout and stderr gets its own cap; the total readable bytes is at most
         // 2 × maxBytes, which is acceptable for the console use-case. An alternative would be
         // a single shared cap, but per-stream caps keep the implementation simpler.
         using var stdoutCapped = new CappedStream(maxBytes);
         using var stderrCapped = new CappedStream(maxBytes);
         await execStream.CopyOutputToAsync(Stream.Null, stdoutCapped, stderrCapped, ct);
+
+        await stdinTask.ConfigureAwait(false);
 
         var execInspect = await _docker.Exec.InspectContainerExecAsync(execCreate.ID, ct);
 

@@ -102,6 +102,58 @@ public class ExecDumpTests
         }
     }
 
+    /// <summary>
+    /// Regression guard: a dump larger than the old ~96 KiB env-var ceiling must succeed.
+    /// This test builds ~1.2 MiB of SQL (5 000 INSERT rows × ~233 B) and restores it via
+    /// ExecDumpAsync.  It FAILS against the previous base64-via-DUMP_B64 delivery (E2BIG /
+    /// execve) and PASSES with the stdin-pipe delivery.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Postgres_large_dump_exceeds_env_ceiling()
+    {
+        await CleanLeakedContainersAsync();
+        var sut = NewSut();
+        var res = await sut.CreateAsync(new CreateInstanceRequest("postgres", 3, 256, "blank"), default);
+
+        try
+        {
+            const int rowCount = 5_000;
+            var payload = new string('x', 200);   // 200-char VARCHAR padding
+
+            // Build the dump: DDL + a GRANT so appuser can SELECT, then the bulk INSERTs.
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("CREATE TABLE big(id INT PRIMARY KEY, payload VARCHAR(200));");
+            sb.AppendLine($"GRANT SELECT ON big TO {res.DbUser};");
+            for (int i = 1; i <= rowCount; i++)
+                sb.AppendLine($"INSERT INTO big VALUES ({i}, '{payload}');");
+
+            string dump = sb.ToString();
+            // Assert dump is above the old env ceiling (~96 KiB) — otherwise this test is vacuous.
+            dump.Length.Should().BeGreaterThan(96 * 1024,
+                "the large-dump test must exercise more than the old env-var ceiling");
+
+            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbName, 90, 256 * 1024);
+            var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
+
+            result.ExitCode.Should().Be(0,
+                $"large postgres dump should restore successfully; stderr: {result.Error}");
+
+            // Verify via the app user that all rows landed.
+            var cs = $"Host=localhost;Port={res.PublicPort};Database={res.DbName};" +
+                     $"Username={res.DbUser};Password={res.DbPassword}";
+            await WaitForPostgresAsync(cs);
+            await using var conn = new NpgsqlConnection(cs);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM big", conn);
+            var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+            count.Should().Be(rowCount, $"all {rowCount} inserted rows must be present after large-dump restore");
+        }
+        finally
+        {
+            await sut.DestroyAsync(res.ContainerId, res.VolumeName, res.PublicPort, default);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Verification helpers
     // -------------------------------------------------------------------------
