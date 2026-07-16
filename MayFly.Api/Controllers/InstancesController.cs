@@ -2,6 +2,7 @@ using MayFly.Api.Data;
 using MayFly.Api.Domain;
 using MayFly.Api.Dtos;
 using MayFly.Api.Engines;
+using MayFly.Api.Import;
 using MayFly.Api.Mongo;
 using MayFly.Api.Security;
 using MayFly.Api.Services;
@@ -15,7 +16,7 @@ namespace MayFly.Api.Controllers;
 [Route("api/instances")]
 public sealed class InstancesController(
     IInstanceService instances, IQueryExecutor queryExec, ISecretProtector secrets, IConfiguration cfg,
-    MayFlyContext db, EngineClientRegistry registry, IMongoOps mongoOps)
+    MayFlyContext db, EngineClientRegistry registry, IMongoOps mongoOps, IDumpImporter dumpImporter)
     : ControllerBase
 {
     private string PublicHost => cfg["PublicHost"] ?? "localhost";
@@ -89,6 +90,21 @@ public sealed class InstancesController(
             await db.SaveChangesAsync(ct);
         }
         catch { /* best-effort: query-log persistence must not break the query response */ }
+        return Ok(result);
+    }
+
+    [HttpPost("{token}/import")]
+    [EnableRateLimiting("import")]
+    [RequestSizeLimit(16 * 1024 * 1024)]
+    public async Task<IActionResult> Import(string token, IFormFile file, CancellationToken ct)
+    {
+        var inst = await instances.GetByTokenAsync(token, ct);
+        if (inst is null) return NotFound();
+        if (file is null || file.Length == 0) return BadRequest("no file");
+        if (file.Length > 16L * 1024 * 1024) return StatusCode(StatusCodes.Status413PayloadTooLarge);
+        using var reader = new StreamReader(file.OpenReadStream());
+        var content = await reader.ReadToEndAsync(ct);
+        var result = await dumpImporter.ImportAsync(inst, content, ct);
         return Ok(result);
     }
 }

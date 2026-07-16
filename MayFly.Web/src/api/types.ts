@@ -13,3 +13,6 @@ export interface DashboardSummary {
   aliveCount: number; maxAlive: number; queriesToday: number;
   storageUsedBytes: number; nextExpiry: string | null;
 }
+export interface ImportResultDto {
+  success: boolean; output: string; error?: string | null; truncated: boolean; ms: number;
+}

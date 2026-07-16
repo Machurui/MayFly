@@ -1,5 +1,6 @@
 using MayFly.Api.Data;
 using MayFly.Api.Engines;
+using MayFly.Api.Import;
 using MayFly.Api.Lifecycle;
 using MayFly.Api.Mongo;
 using MayFly.Api.Provisioning;
@@ -37,6 +38,7 @@ builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddScoped<IInstanceService, InstanceService>();
 builder.Services.AddScoped<IQueryExecutor, QueryExecutor>();
 builder.Services.AddScoped<IMongoOps, MongoOps>();
+builder.Services.AddScoped<IDumpImporter, DumpImporter>();
 builder.Services.AddScoped<DashboardService>();
 builder.Services.AddScoped<QuotaEnforcer>();
 builder.Services.AddHostedService<LifecycleService>();
@@ -69,7 +71,18 @@ builder.Services.AddRateLimiter(o =>
                 PermitLimit = 60,
                 Window = TimeSpan.FromMinutes(1)
             }));
+    o.AddPolicy("import", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 6,
+                Window = TimeSpan.FromMinutes(1)
+            }));
 });
+
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
+    o.MultipartBodyLengthLimit = 16L * 1024 * 1024);
 
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {

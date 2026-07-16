@@ -50,4 +50,11 @@ public sealed class ProvisionerClient(HttpClient http) : IProvisionerClient
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<ExecMongoshResult>(cancellationToken: ct))!;
     }
+
+    public async Task<ExecDumpResult> ExecDumpAsync(string containerId, ExecDumpRequest req, CancellationToken ct)
+    {
+        var resp = await http.PostAsJsonAsync($"/instances/{containerId}/exec-dump", req, ct);
+        resp.EnsureSuccessStatusCode();
+        return (await resp.Content.ReadFromJsonAsync<ExecDumpResult>(cancellationToken: ct))!;
+    }
 }
