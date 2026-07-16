@@ -538,8 +538,12 @@ public sealed class DockerProvisioner : IDockerProvisioner
         switch (req.Engine)
         {
             case "postgres":
+                if (!System.Text.RegularExpressions.Regex.IsMatch(req.AppUser, "^[A-Za-z0-9_]+$"))
+                    throw new ArgumentException("invalid appUser", nameof(req));
                 clientSh = $"timeout {secs} psql -h 127.0.0.1 -U {req.AdminUser} -d {req.Db}" +
-                           $" -v ON_ERROR_STOP=1 -f /tmp/dump.sql";
+                           $" -v ON_ERROR_STOP=1 -f /tmp/dump.sql" +
+                           $" && timeout {secs} psql -h 127.0.0.1 -U {req.AdminUser} -d {req.Db}" +
+                           $" -v ON_ERROR_STOP=1 -c \"GRANT ALL ON ALL TABLES IN SCHEMA public TO {req.AppUser}; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO {req.AppUser};\"";
                 env = new List<string> { $"PGPASSWORD={req.AdminPassword}" };
                 break;
             case "mysql":

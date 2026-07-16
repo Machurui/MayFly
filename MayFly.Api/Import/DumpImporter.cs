@@ -13,7 +13,7 @@ public sealed class DumpImporter(IProvisionerClient prov, ISecretProtector secre
         {
             var pwd = secrets.Unprotect(inst.AdminPasswordEnc);
             var r = await prov.ExecDumpAsync(inst.ContainerId,
-                new ExecDumpRequest(inst.Engine, dumpContent, inst.AdminUser, pwd, inst.DbName, 60, 256 * 1024), ct);
+                new ExecDumpRequest(inst.Engine, dumpContent, inst.AdminUser, pwd, inst.DbUser, inst.DbName, 60, 256 * 1024), ct);
 
             return new ImportResultDto(
                 Success:   r.ExitCode == 0,

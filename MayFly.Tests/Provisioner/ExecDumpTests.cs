@@ -53,7 +53,7 @@ public class ExecDumpTests
                 ? "db.getSiblingDB('appdb').getCollection('imp').insertMany([{_id:1,name:'x'},{_id:2,name:'y'}]);"
                 : "CREATE TABLE imp (id INT PRIMARY KEY, name VARCHAR(50)); INSERT INTO imp (id,name) VALUES (1,'x'),(2,'y');";
 
-            var req = new ExecDumpRequest(engine, dump, res.AdminUser, res.AdminPassword, res.DbName, 60, 256 * 1024);
+            var req = new ExecDumpRequest(engine, dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0, $"{engine} dump should restore successfully; stderr: {result.Error}");
@@ -81,7 +81,7 @@ public class ExecDumpTests
                 "CREATE TABLE ext_t(id int);\n" +
                 "INSERT INTO ext_t VALUES (1);";
 
-            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbName, 60, 256 * 1024);
+            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0,
@@ -132,7 +132,7 @@ public class ExecDumpTests
             dump.Length.Should().BeGreaterThan(96 * 1024,
                 "the large-dump test must exercise more than the old env-var ceiling");
 
-            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbName, 90, 256 * 1024);
+            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 90, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0,
@@ -165,7 +165,7 @@ public class ExecDumpTests
             case "postgres":
             {
                 var cs = $"Host=localhost;Port={res.PublicPort};Database={res.DbName};" +
-                         $"Username={res.AdminUser};Password={res.AdminPassword}";
+                         $"Username={res.DbUser};Password={res.DbPassword}";
                 await WaitForPostgresAsync(cs);
                 await using var conn = new NpgsqlConnection(cs);
                 await conn.OpenAsync();

@@ -71,7 +71,7 @@ public class ImportEndpointTests
                 .Returns(async (string cid, ApiExecRequest req, CancellationToken ct) =>
                 {
                     var pr = new ProvRequest(req.Engine, req.DumpContent, req.AdminUser, req.AdminPassword,
-                        req.Db, req.TimeoutSeconds, req.MaxOutputBytes);
+                        req.AppUser, req.Db, req.TimeoutSeconds, req.MaxOutputBytes);
                     var sr = await realProvisioner.ExecDumpAsync(cid, pr, ct);
                     return new ApiExecResult(sr.Output, sr.Error, sr.ExitCode, sr.Truncated, sr.Ms);
                 });
@@ -83,14 +83,10 @@ public class ImportEndpointTests
             var ok = await importer.ImportAsync(inst, validDump, default);
             ok.Success.Should().BeTrue($"valid dump must succeed; error: {ok.Error}");
 
-            // Verify via appuser — we need to grant SELECT first so appuser can read the table
+            // Verify via appuser — ExecDumpAsync auto-grants access after restore, no manual GRANT needed
             var appCs = $"Host=localhost;Port={r.PublicPort};Database={r.DbName};" +
                         $"Username={r.DbUser};Password={r.DbPassword}";
             await WaitForPostgresAsync(appCs);
-
-            // Grant SELECT on imp to dbuser (done via a second import as admin)
-            var grant = await importer.ImportAsync(inst, $"GRANT SELECT ON imp TO {r.DbUser};", default);
-            grant.Success.Should().BeTrue("GRANT must succeed");
 
             await using var conn = new NpgsqlConnection(appCs);
             await conn.OpenAsync();
