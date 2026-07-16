@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { createInstance } from '../api/instances'
+import { createInstance, importDump } from '../api/instances'
+import type { ImportResultDto } from '../api/types'
 import { engineLabel } from '../lib/engineLabels'
 import EnginePicker from '../components/EnginePicker.vue'
 import TtlPicker from '../components/TtlPicker.vue'
@@ -10,13 +11,16 @@ import InitialDataPicker from '../components/InitialDataPicker.vue'
 
 const router = useRouter()
 
-const engine      = ref('postgres')
-const ttlHours    = ref(3)
-const storageMb   = ref(256)
-const initialData = ref('blank')
-const name        = ref('')
-const error       = ref('')
-const busy        = ref(false)
+const engine       = ref('postgres')
+const ttlHours     = ref(3)
+const storageMb    = ref(256)
+const initialData  = ref('blank')
+const dumpFile     = ref<File | null>(null)
+const name         = ref('')
+const error        = ref('')
+const busy         = ref(false)
+const restoring    = ref(false)
+const importResult = ref<ImportResultDto | null>(null)
 
 const engineMeta: Record<string, { driver: string; version: string }> = {
   postgres: { driver: 'postgresql', version: '17.5' },
@@ -38,17 +42,36 @@ const summary = computed(() => {
 > name   ${nm}`
 })
 
+const canCreate = computed(() =>
+  !busy.value && !(initialData.value === 'dump' && !dumpFile.value)
+)
+
 async function create() {
   busy.value = true
   error.value = ''
+  importResult.value = null
   try {
     const inst = await createInstance({
       engine: engine.value,
       ttlHours: ttlHours.value,
       storageMb: storageMb.value,
-      initialData: initialData.value,
+      initialData: initialData.value === 'dump' ? 'blank' : initialData.value,
     })
-    router.push('/instance/' + inst.token)
+
+    if (initialData.value === 'dump' && dumpFile.value) {
+      restoring.value = true
+      try {
+        const result = await importDump(inst.token, dumpFile.value)
+        importResult.value = result
+        if (result.success) {
+          router.push('/instance/' + inst.token)
+        }
+      } finally {
+        restoring.value = false
+      }
+    } else {
+      router.push('/instance/' + inst.token)
+    }
   } catch (e: unknown) {
     const err = e as { status?: number; message?: string }
     error.value = err?.status === 429
@@ -149,7 +172,7 @@ async function create() {
           </div>
           <div class="hr flex-1" style="margin-left: 12px;"></div>
         </div>
-        <InitialDataPicker v-model="initialData" :engine="engine" />
+        <InitialDataPicker v-model="initialData" v-model:file="dumpFile" :engine="engine" />
       </section>
 
       <!-- Section 05 — Name -->
@@ -169,6 +192,13 @@ async function create() {
       <!-- Error message -->
       <p v-if="error" class="danger" style="margin-bottom: 12px; font-size: 12.5px;">{{ error }}</p>
 
+      <!-- Import failure output -->
+      <div v-if="importResult && !importResult.success" class="frame" style="margin-bottom: 16px;">
+        <span class="crn-bl"></span><span class="crn-br"></span>
+        <div class="dim" style="font-size: 11.5px; margin-bottom: 6px;">Import failed — check your dump and try again.</div>
+        <pre class="code" style="background: transparent; border: none; padding: 0; margin: 0; font-size: 11px; white-space: pre-wrap; color: var(--danger, #e05252);">{{ importResult.error ?? importResult.output }}</pre>
+      </div>
+
       <!-- Summary frame -->
       <div class="frame" style="margin-top: 8px; margin-bottom: 60px;">
         <span class="crn-bl"></span><span class="crn-br"></span>
@@ -178,10 +208,10 @@ async function create() {
             <button
               class="btn primary lg"
               data-test="create"
-              :disabled="busy"
+              :disabled="!canCreate"
               @click="create"
             >
-              {{ busy ? '▸ provisioning…' : '▸ provision now' }}
+              {{ restoring ? '▸ restoring…' : busy ? '▸ provisioning…' : '▸ provision now' }}
               <span class="dimmer" style="font-size: 11px;">⏎</span>
             </button>
             <div class="dimmer" style="font-size: 11px;">or press <kbd>⌘⏎</kbd></div>

@@ -15,11 +15,18 @@ async function handle<T>(resp: Response): Promise<T> {
   return resp.status === 204 ? (undefined as T) : await resp.json() as T
 }
 
-const opts: RequestInit = { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } }
+const jsonHeaders = { 'Content-Type': 'application/json' }
+const base: RequestInit = { credentials: 'same-origin' }
 
 export const api = {
-  get: <T>(p: string) => fetch(p, opts).then(r => handle<T>(r)),
-  post: <T>(p: string, body: unknown) =>
-    fetch(p, { ...opts, method: 'POST', body: JSON.stringify(body) }).then(r => handle<T>(r)),
-  del: (p: string) => fetch(p, { ...opts, method: 'DELETE' }).then(r => handle<void>(r)),
+  get: <T>(p: string) =>
+    fetch(p, { ...base, headers: jsonHeaders }).then(r => handle<T>(r)),
+  post: <T>(p: string, body: unknown) => {
+    const isForm = body instanceof FormData
+    const init: RequestInit = { ...base, method: 'POST', body: isForm ? body : JSON.stringify(body) }
+    if (!isForm) init.headers = jsonHeaders
+    return fetch(p, init).then(r => handle<T>(r))
+  },
+  del: (p: string) =>
+    fetch(p, { ...base, method: 'DELETE', headers: jsonHeaders }).then(r => handle<void>(r)),
 }
