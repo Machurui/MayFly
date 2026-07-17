@@ -37,7 +37,7 @@ cleanup() {
   docker compose down -v 2>/dev/null || true
   # Remove provisioner-managed containers (DB containers are always named mayfly-pg-<id>
   # regardless of engine; sidecars are mayfly-sidecar-<id>; writer containers are transient)
-  REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar|initwriter)-' || true)
+  REMAINING=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|mongo|sidecar|initwriter)-' || true)
   if [[ -n "$REMAINING" ]]; then
     echo "  Force-removing leftover containers: $REMAINING"
     echo "$REMAINING" | xargs docker rm -f 2>/dev/null || true
@@ -241,9 +241,9 @@ test_engine() {
   if [[ "$del_status" == "204" ]]; then
     check_pass "${label} D: destroy → 204"
     sleep 2
-    # Check no leftover DB or sidecar containers (all DB containers named mayfly-pg-<id>)
+    # Check no leftover DB or sidecar containers (all DB containers named mayfly-pg-<id> or mayfly-mongo-<id>)
     local remaining
-    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
+    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|mongo|sidecar)-' || true)
     if [[ -z "$remaining" ]]; then
       check_pass "${label} D: no leftover DB/sidecar containers after delete"
     else
@@ -372,12 +372,12 @@ test_import_engine() {
       check_fail "${label} C: query restored data → failed (success=$q_success, count=$q_count)"
     fi
   else
-    # mongo: output field should contain "3"
+    # mongo: output field should contain exactly "3"
     local q_output
     q_output=$(echo "$query_body" | python3 -c \
       "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
     echo "  success=$q_success  output=$q_output"
-    if [[ "$q_success" == "True" ]] && echo "$q_output" | grep -qF "3"; then
+    if [[ "$q_success" == "True" ]] && [[ "$(echo "$q_output" | tr -d '[:space:]')" == "3" ]]; then
       check_pass "${label} C: query restored data → success:true, output contains '3'"
     else
       check_fail "${label} C: query restored data → failed (success=$q_success, output='$q_output')"
@@ -398,7 +398,7 @@ test_import_engine() {
     check_pass "${label} D: destroy → 204"
     sleep 2
     local remaining
-    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
+    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|mongo|sidecar)-' || true)
     if [[ -z "$remaining" ]]; then
       check_pass "${label} D: no leftover DB/sidecar containers after delete"
     else
