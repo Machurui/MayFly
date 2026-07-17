@@ -1,3 +1,4 @@
+using System.Text;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using FluentAssertions;
@@ -53,7 +54,7 @@ public class ExecDumpTests
                 ? "db.getSiblingDB('appdb').getCollection('imp').insertMany([{_id:1,name:'x'},{_id:2,name:'y'}]);"
                 : "CREATE TABLE imp (id INT PRIMARY KEY, name VARCHAR(50)); INSERT INTO imp (id,name) VALUES (1,'x'),(2,'y');";
 
-            var req = new ExecDumpRequest(engine, dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
+            var req = new ExecDumpRequest(engine, Convert.ToBase64String(Encoding.UTF8.GetBytes(dump)), res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0, $"{engine} dump should restore successfully; stderr: {result.Error}");
@@ -81,7 +82,7 @@ public class ExecDumpTests
                 "CREATE TABLE ext_t(id int);\n" +
                 "INSERT INTO ext_t VALUES (1);";
 
-            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
+            var req = new ExecDumpRequest("postgres", Convert.ToBase64String(Encoding.UTF8.GetBytes(dump)), res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 60, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0,
@@ -132,7 +133,7 @@ public class ExecDumpTests
             dump.Length.Should().BeGreaterThan(96 * 1024,
                 "the large-dump test must exercise more than the old env-var ceiling");
 
-            var req = new ExecDumpRequest("postgres", dump, res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 90, 256 * 1024);
+            var req = new ExecDumpRequest("postgres", Convert.ToBase64String(Encoding.UTF8.GetBytes(dump)), res.AdminUser, res.AdminPassword, res.DbUser, res.DbName, 90, 256 * 1024);
             var result = await sut.ExecDumpAsync(res.ContainerId, req, default);
 
             result.ExitCode.Should().Be(0,

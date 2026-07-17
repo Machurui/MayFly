@@ -101,10 +101,11 @@ public sealed class InstancesController(
         var inst = await instances.GetByTokenAsync(token, ct);
         if (inst is null) return NotFound();
         if (file is null || file.Length == 0) return BadRequest("no file");
-        if (file.Length > 16L * 1024 * 1024) return StatusCode(StatusCodes.Status413PayloadTooLarge);
-        using var reader = new StreamReader(file.OpenReadStream());
-        var content = await reader.ReadToEndAsync(ct);
-        var result = await dumpImporter.ImportAsync(inst, content, ct);
+        await using var ms = new MemoryStream();
+        await file.OpenReadStream().CopyToAsync(ms, ct);
+        var bytes = ms.ToArray();
+        if (bytes.Length > 16L * 1024 * 1024) return StatusCode(StatusCodes.Status413PayloadTooLarge);
+        var result = await dumpImporter.ImportAsync(inst, bytes, ct);
         return Ok(result);
     }
 }

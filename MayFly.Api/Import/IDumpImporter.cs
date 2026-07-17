@@ -5,5 +5,5 @@ namespace MayFly.Api.Import;
 
 public interface IDumpImporter
 {
-    Task<ImportResultDto> ImportAsync(Instance inst, string dumpContent, CancellationToken ct);
+    Task<ImportResultDto> ImportAsync(Instance inst, byte[] dumpBytes, CancellationToken ct);
 }

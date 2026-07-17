@@ -578,7 +578,8 @@ public sealed class DockerProvisioner : IDockerProvisioner
         var cmd = new List<string> { "sh", "-c", sh };
 
         // Raw dump bytes delivered over exec stdin — binary-safe, no size limit.
-        var stdinBytes = Encoding.UTF8.GetBytes(req.DumpContent);
+        // DumpContent is base64-encoded by DumpImporter so bytes round-trip without corruption.
+        var stdinBytes = Convert.FromBase64String(req.DumpContent);
 
         // Outer safety CTS: cancels after TimeoutSeconds + 5 s so the API call can never hang
         // even if the container-side `timeout` misbehaves.

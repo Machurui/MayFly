@@ -1,3 +1,4 @@
+using System.Text;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using FluentAssertions;
@@ -80,7 +81,7 @@ public class ImportEndpointTests
 
             // 1. Valid SQL: create table and insert rows
             const string validDump = "CREATE TABLE imp(id int); INSERT INTO imp VALUES (1),(2);";
-            var ok = await importer.ImportAsync(inst, validDump, default);
+            var ok = await importer.ImportAsync(inst, Encoding.UTF8.GetBytes(validDump), default);
             ok.Success.Should().BeTrue($"valid dump must succeed; error: {ok.Error}");
 
             // Verify via appuser — ExecDumpAsync auto-grants access after restore, no manual GRANT needed
@@ -95,9 +96,22 @@ public class ImportEndpointTests
             count.Should().Be(2, "restored dump must have 2 rows in imp");
 
             // 2. Invalid SQL: must fail
-            var bad = await importer.ImportAsync(inst, "this is not valid sql;;;", default);
+            var bad = await importer.ImportAsync(inst, Encoding.UTF8.GetBytes("this is not valid sql;;;"), default);
             bad.Success.Should().BeFalse("invalid SQL must fail");
             (bad.Error ?? bad.Output).Should().NotBeNullOrEmpty("error/output must be populated on failure");
+
+            // 3. Non-ASCII round-trip: verify no silent UTF-8 corruption via base64 transport
+            const string nonAsciiDump =
+                "CREATE TABLE unicode_t(id int PRIMARY KEY, name varchar(100));" +
+                "INSERT INTO unicode_t VALUES (1, 'café-日本-😀');";
+            var nonAsciiOk = await importer.ImportAsync(inst, Encoding.UTF8.GetBytes(nonAsciiDump), default);
+            nonAsciiOk.Success.Should().BeTrue($"non-ASCII dump must succeed; error: {nonAsciiOk.Error}");
+
+            await using var conn2 = new NpgsqlConnection(appCs);
+            await conn2.OpenAsync();
+            await using var cmd2 = new NpgsqlCommand("SELECT name FROM unicode_t WHERE id = 1", conn2);
+            var name = (string?)await cmd2.ExecuteScalarAsync();
+            name.Should().Be("café-日本-😀", "non-ASCII characters must round-trip through base64 transport without corruption");
         }
         finally
         {
