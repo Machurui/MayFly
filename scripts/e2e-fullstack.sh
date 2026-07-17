@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MayFly full-stack end-to-end smoke test — all five engines.
+# MayFly full-stack end-to-end smoke test — all five engines + import.
 # Builds all images, brings up the complete stack, exercises checks through
 # Caddy on http://localhost for each engine (postgres/mysql/mariadb/mssql/mongo),
 # then tears everything down on EXIT.
@@ -13,6 +13,12 @@
 #   B. Egress probe (best-effort)    → DB container has no outbound internet
 #   C. POST /api/instances/{token}/query  → success:true [, count>0 for Northwind / output contains value for mongo]
 #   D. DELETE /api/instances/{token} → 204; no leftover DB/sidecar containers
+#
+# Import checks (postgres + mongo, run sequentially after per-engine checks):
+#   A. POST /api/instances {engine, blank}         → 201 + token
+#   B. POST /api/instances/{token}/import (dump)   → success:true
+#   C. POST /api/instances/{token}/query           → restored data confirmed
+#   D. DELETE /api/instances/{token}               → 204
 #
 # Engines: postgres (Northwind seed), mysql (blank), mariadb (blank), mssql (blank, 300s), mongo (blank)
 set -euo pipefail
@@ -248,8 +254,163 @@ test_engine() {
   fi
 }
 
+# ── test_import_engine <engine> ───────────────────────────────────────────────
+# Tests the import (dump restore) endpoint for a given engine (postgres|mongo).
+# Steps: create (blank) → write dump → upload multipart → assert success:true →
+#        query restored data → assert result → destroy.
+test_import_engine() {
+  local engine="$1"
+  local label="[${engine}:import]"
+  local token="" dumpfile=""
+
+  echo ""
+  echo "============================================"
+  echo "IMPORT TEST: $engine"
+  echo "============================================"
+
+  # --- A: Create blank instance ---
+  echo "${label} A: POST /api/instances (blank, ttlHours=3, storageMb=256)"
+  local create_resp create_status create_body
+  create_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 180 \
+    -X POST http://localhost/api/instances \
+    -H 'Content-Type: application/json' \
+    -d "{\"engine\":\"${engine}\",\"ttlHours\":3,\"storageMb\":256,\"initialData\":\"blank\"}" \
+    2>/dev/null || echo "__STATUS__:000")
+  create_status=$(echo "$create_resp" | grep '__STATUS__:' | cut -d: -f2)
+  create_body=$(echo "$create_resp" | grep -v '__STATUS__:')
+  echo "  HTTP $create_status"
+  echo "  Body: $create_body"
+
+  if [[ "$create_status" != "201" ]]; then
+    check_fail "${label} A: create → expected 201, got $create_status"
+    return
+  fi
+  check_pass "${label} A: create → 201"
+
+  token=$(echo "$create_body" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null || echo "")
+  echo "  Token: $token"
+  if [[ -z "$token" ]]; then
+    check_fail "${label} A: token missing from response body"
+    return
+  fi
+
+  # --- B: Write dump to temp file and upload ---
+  if [[ "$engine" == "postgres" ]]; then
+    dumpfile=$(mktemp /tmp/mayfly-import-$$.XXXXXX.sql)
+    printf 'CREATE TABLE imp(id int);\nINSERT INTO imp VALUES (1),(2),(3);\n' > "$dumpfile"
+  else
+    # mongo
+    dumpfile=$(mktemp /tmp/mayfly-import-$$.XXXXXX.js)
+    printf "db.getSiblingDB('appdb').getCollection('imp').insertMany([{_id:1},{_id:2},{_id:3}]);\n" \
+      > "$dumpfile"
+  fi
+  echo ""
+  echo "${label} B: POST /api/instances/$token/import (file=$(basename "$dumpfile"))"
+  local import_resp import_status import_body
+  import_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 60 \
+    -F "file=@${dumpfile}" \
+    "http://localhost/api/instances/$token/import" \
+    2>/dev/null || echo "__STATUS__:000")
+  import_status=$(echo "$import_resp" | grep '__STATUS__:' | cut -d: -f2)
+  import_body=$(echo "$import_resp" | grep -v '__STATUS__:')
+  rm -f "$dumpfile"
+  echo "  HTTP $import_status  body: $import_body"
+
+  local imp_success
+  imp_success=$(echo "$import_body" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin).get('success',''))" 2>/dev/null || echo "")
+  echo "  import success=$imp_success"
+  if [[ "$imp_success" == "True" ]]; then
+    check_pass "${label} B: import → success:true"
+  else
+    check_fail "${label} B: import → failed (HTTP $import_status, success=$imp_success)"
+    docker compose logs api | tail -20
+    docker compose logs provisioner | tail -20
+    # Still attempt destroy before returning
+    curl -s -c "$COOKIES" -b "$COOKIES" -X DELETE "http://localhost/api/instances/$token" \
+      --max-time 30 2>/dev/null || true
+    return
+  fi
+
+  # --- C: Query restored data ---
+  echo ""
+  local query
+  if [[ "$engine" == "postgres" ]]; then
+    query="SELECT COUNT(*) FROM imp"
+  else
+    query="print(db.getCollection('imp').countDocuments())"
+  fi
+  echo "${label} C: POST /api/instances/$token/query  query=\"$query\""
+  local query_json
+  query_json=$(python3 -c "import json,sys; print(json.dumps({'query': sys.argv[1]}))" "$query")
+  local query_resp query_status query_body
+  query_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 30 \
+    -X POST "http://localhost/api/instances/$token/query" \
+    -H 'Content-Type: application/json' \
+    -d "$query_json" \
+    2>/dev/null || echo "__STATUS__:000")
+  query_status=$(echo "$query_resp" | grep '__STATUS__:' | cut -d: -f2)
+  query_body=$(echo "$query_resp" | grep -v '__STATUS__:')
+  echo "  HTTP $query_status  body: $query_body"
+
+  local q_success
+  q_success=$(echo "$query_body" | python3 -c \
+    "import sys,json; print(json.load(sys.stdin).get('success',''))" 2>/dev/null || echo "")
+
+  if [[ "$engine" == "postgres" ]]; then
+    local q_count
+    q_count=$(echo "$query_body" | python3 -c \
+      "import sys,json; print(json.load(sys.stdin).get('rows',[[0]])[0][0])" 2>/dev/null || echo "0")
+    echo "  success=$q_success  count=$q_count"
+    if [[ "$q_success" == "True" ]] && [[ "$q_count" == "3" ]]; then
+      check_pass "${label} C: query restored data → success:true, count=3"
+    else
+      check_fail "${label} C: query restored data → failed (success=$q_success, count=$q_count)"
+    fi
+  else
+    # mongo: output field should contain "3"
+    local q_output
+    q_output=$(echo "$query_body" | python3 -c \
+      "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null || echo "")
+    echo "  success=$q_success  output=$q_output"
+    if [[ "$q_success" == "True" ]] && echo "$q_output" | grep -qF "3"; then
+      check_pass "${label} C: query restored data → success:true, output contains '3'"
+    else
+      check_fail "${label} C: query restored data → failed (success=$q_success, output='$q_output')"
+    fi
+  fi
+
+  # --- D: Destroy ---
+  echo ""
+  echo "${label} D: DELETE /api/instances/$token"
+  local del_resp del_status
+  del_resp=$(curl -s -c "$COOKIES" -b "$COOKIES" \
+    -w "\n__STATUS__:%{http_code}" --max-time 30 \
+    -X DELETE "http://localhost/api/instances/$token" \
+    2>/dev/null || echo "__STATUS__:000")
+  del_status=$(echo "$del_resp" | grep '__STATUS__:' | cut -d: -f2)
+  echo "  DELETE HTTP $del_status"
+  if [[ "$del_status" == "204" ]]; then
+    check_pass "${label} D: destroy → 204"
+    sleep 2
+    local remaining
+    remaining=$(docker ps -a --format '{{.Names}}' | grep -E '^mayfly-(pg|sidecar)-' || true)
+    if [[ -z "$remaining" ]]; then
+      check_pass "${label} D: no leftover DB/sidecar containers after delete"
+    else
+      check_fail "${label} D: leftover containers after delete: $remaining"
+    fi
+  else
+    check_fail "${label} D: destroy → expected 204, got $del_status"
+  fi
+}
+
 echo "============================================"
-echo "MayFly Full-Stack E2E — All Engines"
+echo "MayFly Full-Stack E2E — All Engines + Import"
 echo "  Entry point: http://localhost"
 echo "  Engines: postgres / mysql / mariadb / mssql / mongo"
 echo "============================================"
@@ -362,6 +523,19 @@ test_engine postgres  256  blog       "SELECT COUNT(*) FROM posts"  count
 
 # mongo + blog: verify posts collection was seeded (5 docs expected)
 test_engine mongo     256  blog       "print(\"POSTS=\"+db.getCollection('posts').countDocuments())"  "output:POSTS=5"
+
+# ── Import (dump restore) checks ──────────────────────────────────────────────
+echo ""
+echo "============================================"
+echo "Import (dump restore) checks"
+echo "============================================"
+
+# postgres: upload a small SQL dump; appuser is granted access after restore;
+# query confirms data was restored (COUNT(*) FROM imp = 3)
+test_import_engine postgres
+
+# mongo: upload a JS dump; query confirms data was restored (countDocuments = 3)
+test_import_engine mongo
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
